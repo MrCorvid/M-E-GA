@@ -10,6 +10,8 @@ import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from matplotlib.colors import Normalize
 from mpl_toolkits.mplot3d.art3d import Line3DCollection
+import os
+import imageio.v2 as imageio
 
 # Neuron type enumeration
 class NeuronType(Enum):
@@ -46,6 +48,8 @@ class NetworkParameters:
     base_radius_shrink_rate: float = 0.95
     activation_radius_factor: float = 0.2
     activation_threshold: float = 0.5
+    enable_visualization: bool = False
+    visualization_dir: str = "network_evolution"
 
     print('Network initialized')
 
