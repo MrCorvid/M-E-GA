@@ -10,7 +10,8 @@ class NetworkEvolutionFitness:
         network_params: Dict[str, any],
         update_best_func=None,
         max_path_length: int = 200,
-        path_step_reward: float = 0
+        path_step_reward: float = 0.5,
+        debug: bool = False
     ):
         """
         Initialize Phase 1 fitness evaluation focusing on network connectivity structure.
@@ -20,7 +21,9 @@ class NetworkEvolutionFitness:
             update_best_func (callable, optional): Function to update the best individuals.
             max_path_length (int): Maximum allowed path length before applying penalties.
             path_step_reward (float): Reward for each successful path step.
+            debug (bool): Enable debug output printing.
         """
+        self.debug = debug
         self.update_best = update_best_func
 
         # Path control parameters
@@ -36,7 +39,7 @@ class NetworkEvolutionFitness:
 
         # Create network parameters using the provided network_params dictionary
         self.network_params = NetworkParameters(
-            volume_size=network_params.get('volume_size', 20.0),
+            volume_size=network_params.get('volume_size', 8.0),
             num_input=network_params.get('num_input', 100),
             num_output=network_params.get('num_output', 4),
             total_neurons=network_params.get('total_neurons', 800),
@@ -159,9 +162,9 @@ class NetworkEvolutionFitness:
     def compute(self, encoded_individual, ga_instance) -> float:
         """
         Phase 1 fitness computation. Final fitness is:
-        fitness = int(connectivity_percentage) + path_score
+        fitness = connectivity_score + path_score
 
-        connectivity_percentage: 0-100 (percentage of reachable neurons)
+        connectivity_score: 0-100 (percentage of reachable neurons)
         path_score: raw score based on steps, drops, and penalties
 
         Exits Phase 1 when 100% connectivity is achieved.
@@ -173,20 +176,30 @@ class NetworkEvolutionFitness:
         # Get raw path score from execution
         path_score = movement_results['path_score']
 
-        # Calculate connectivity percentage (0-100) and convert to int
+        # Calculate connectivity percentage (0-100)
         connectivity_score = int(self.calculate_connectivity_score())
 
         # Check if we've achieved 100% connectivity
         if connectivity_score == 100:
-            print("\nExiting Phase 1: Achieved 100% network connectivity")
-            print(f"Final Stats:")
-            print(f"Neurons Moved: {movement_results['neurons_moved']}")
-            print(f"Path Length: {movement_results['successful_steps']}")
-            print(f"Failed Drops: {movement_results['failed_drops']}")
+            if self.debug:
+                print("\nExiting Phase 1: Achieved 100% network connectivity")
+                print(f"Final Stats:")
+                print(f"Neurons Moved: {movement_results['neurons_moved']}")
+                print(f"Path Length: {movement_results['successful_steps']}")
+                print(f"Failed Drops: {movement_results['failed_drops']}")
             sys.exit(0)  # Clean exit after achieving goal
 
-        # Final fitness is the integer connectivity percentage plus raw path score
+        # Final fitness is the connectivity percentage plus raw path score
         fitness = connectivity_score + path_score
+
+        if self.debug:
+            print(f"\nFitness Calculation Details:")
+            print(f"Path Length: {movement_results['successful_steps']}")
+            print(f"Successful Drops: {movement_results['neurons_moved']}")
+            print(f"Failed Drops: {movement_results['failed_drops']}")
+            print(f"Raw Path Score: {path_score:.2f}")
+            print(f"Connectivity Score: {connectivity_score}%")
+            print(f"Combined Fitness: {fitness:.2f}")
 
         if self.update_best:
             self.update_best(encoded_individual, fitness)
