@@ -10,9 +10,6 @@ import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from matplotlib.colors import Normalize
 from mpl_toolkits.mplot3d.art3d import Line3DCollection
-from matplotlib.animation import FuncAnimation
-import matplotlib
-matplotlib.use('Agg')
 
 # Neuron type enumeration
 class NeuronType(Enum):
@@ -143,7 +140,7 @@ class SpatialNeuralNetwork:
 
         # Thread pool for parallel operations
         self.pool = concurrent.futures.ThreadPoolExecutor(
-            max_workers=min(32, (params.total_neurons // 50) + 1)
+            max_workers=min(32, (params.total_neurons // 100) + 1)
         )
 
     def add_neuron(self, neuron: Neuron):
@@ -400,115 +397,6 @@ class SpatialNeuralNetwork:
 
             return connectivity_percentage
 
-
-class NetworkAnimator:
-    def __init__(self):
-        self.frames = []
-        self.fig = None
-        self.is_recording = False
-
-    def start_recording(self):
-        self.frames = []
-        self.is_recording = True
-
-    def stop_recording(self):
-        self.is_recording = False
-
-    def capture_frame(self, network: 'SpatialNeuralNetwork'):
-        if not self.is_recording:
-            return
-
-        fig = plt.figure(figsize=(12, 8))
-        ax = fig.add_subplot(111, projection='3d')
-
-        # Plot the network state
-        color_map = {
-            NeuronType.INPUT: 'red',
-            NeuronType.HIDDEN: 'blue',
-            NeuronType.OUTPUT: 'green'
-        }
-
-        # Plot neurons and connections
-        weights = [neuron.calculate_weight(target)
-                   for neuron in network.neurons.values()
-                   for target in neuron.connections]
-        if not weights:
-            weights = [0.0]
-
-        norm = Normalize(vmin=min(weights), vmax=max(weights))
-        cmap = plt.get_cmap('viridis')
-        line_segments = []
-        colors = []
-
-        # Plot neurons
-        for neuron in network.neurons.values():
-            color = 'cyan' if neuron in network.interface_neurons else color_map[neuron.type]
-            ax.scatter(neuron.position.x, neuron.position.y, neuron.position.z,
-                       color=color, s=50)
-
-            # Plot connections
-            for target in neuron.connections:
-                xs = [neuron.position.x, target.position.x]
-                ys = [neuron.position.y, target.position.y]
-                zs = [neuron.position.z, target.position.z]
-                line_segments.append(list(zip(xs, ys, zs)))
-                weight = neuron.calculate_weight(target)
-                colors.append(weight)
-
-        if line_segments:
-            lc = Line3DCollection(line_segments, cmap=cmap, norm=norm)
-            lc.set_array(np.array(colors))
-            ax.add_collection(lc)
-
-        # Set labels and title
-        ax.set_xlabel('X')
-        ax.set_ylabel('Y')
-        ax.set_zlabel('Z')
-        ax.set_title(f'Network State - Step {len(self.frames)}')
-
-        # Set consistent view limits
-        ax.set_xlim(0, network.params.volume_size)
-        ax.set_ylim(0, network.params.volume_size)
-        ax.set_zlim(0, network.params.volume_size)
-
-        # Capture the figure
-        self.frames.append(fig)
-        plt.close(fig)
-
-    def save_animation(self, filename='network_evolution.mp4', fps=5):
-        if not self.frames:
-            print("No frames to animate")
-            return
-
-        print(f"Creating animation with {len(self.frames)} frames...")
-
-        # Create a new figure for the animation
-        fig = plt.figure(figsize=(12, 8))
-        ax = fig.add_subplot(111, projection='3d')
-
-        def update(frame):
-            ax.clear()
-            ax.set_xlabel('X')
-            ax.set_ylabel('Y')
-            ax.set_zlabel('Z')
-            # Copy content from saved frame
-            for artist in self.frames[frame].gca().get_children():
-                if isinstance(artist, (Line3DCollection, plt.Line2D)):
-                    ax.add_artist(artist)
-            return ax,
-
-        anim = FuncAnimation(fig, update, frames=len(self.frames),
-                             interval=1000 / fps, blit=True)
-
-        # Save animation
-        anim.save(filename, writer='ffmpeg', fps=fps)
-        plt.close()
-        print(f"Animation saved to {filename}")
-
-
-# Create a global animator instance
-network_animator = NetworkAnimator()
-
 def plot_network_with_weights(network: SpatialNeuralNetwork):
     import matplotlib.pyplot as plt
     from matplotlib.colors import Normalize
@@ -573,11 +461,7 @@ def plot_network_with_weights(network: SpatialNeuralNetwork):
     ax.set_zlabel('Z')
     ax.set_title('3D Spatial Neural Network with Connection Weights Heatmap')
 
-
-def create_network(params: NetworkParameters, animate: bool = False) -> SpatialNeuralNetwork:
-    if animate:
-        network_animator.start_recording()
-
+def create_network(params: NetworkParameters) -> SpatialNeuralNetwork:
     network = SpatialNeuralNetwork(params)
     id_counter = 0
 
@@ -590,108 +474,6 @@ def create_network(params: NetworkParameters, animate: bool = False) -> SpatialN
     def is_position_occupied(position: Position) -> bool:
         position_key = (int(position.x), int(position.y), int(position.z))
         return position_key in occupied_positions
-
-    def add_position(position: Position):
-        position_key = (int(position.x), int(position.y), int(position.z))
-        occupied_positions.add(position_key)
-
-    # Create input and interface neurons
-    for _ in range(params.num_input):
-        # Generate unique position for input neuron using integer positions
-        while True:
-            input_pos = Position(
-                x=float(np.random.randint(0, int(params.volume_size))),
-                y=float(np.random.randint(0, int(params.volume_size))),
-                z=float(np.random.randint(0, int(params.volume_size)))
-            )
-            if not is_position_occupied(input_pos):
-                add_position(input_pos)
-                break
-
-        input_neuron = Neuron(id_counter, NeuronType.INPUT, input_pos, params)
-        input_neuron.radius = input_radius
-        input_neuron.radius_mutable = False
-        network.add_neuron(input_neuron)
-        id_counter += 1
-
-        # Generate unique position for interface neuron adjacent to input
-        while True:
-            # Pick a random adjacent position (including diagonals)
-            dx = np.random.randint(-1, 2)
-            dy = np.random.randint(-1, 2)
-            dz = np.random.randint(-1, 2)
-            interface_pos = Position(
-                x=float((int(input_pos.x) + dx) % int(params.volume_size)),
-                y=float((int(input_pos.y) + dy) % int(params.volume_size)),
-                z=float((int(input_pos.z) + dz) % int(params.volume_size))
-            )
-            if not is_position_occupied(interface_pos):
-                add_position(interface_pos)
-                break
-
-        interface_neuron = Neuron(id_counter, NeuronType.HIDDEN, interface_pos, params)
-        interface_neuron.radius = interface_radius
-        interface_neuron.radius_mutable = False
-        network.add_neuron(interface_neuron)
-        id_counter += 1
-
-        if animate:
-            network.update_connections()
-            network_animator.capture_frame(network)
-
-    # Create hidden neurons
-    for _ in range(params.num_hidden):
-        while True:
-            pos = Position(
-                x=float(np.random.randint(0, int(params.volume_size))),
-                y=float(np.random.randint(0, int(params.volume_size))),
-                z=float(np.random.randint(0, int(params.volume_size)))
-            )
-            if not is_position_occupied(pos):
-                add_position(pos)
-                break
-
-        neuron = Neuron(id_counter, NeuronType.HIDDEN, pos, params)
-        min_hidden_radius = params.hidden_radius_range[0] * params.max_radius
-        max_hidden_radius = params.hidden_radius_range[1] * params.max_radius
-        neuron.radius = np.random.uniform(min_hidden_radius, max_hidden_radius)
-        network.add_neuron(neuron)
-        id_counter += 1
-
-        if animate and id_counter % 10 == 0:  # Capture every 10th hidden neuron addition
-            network.update_connections()
-            network_animator.capture_frame(network)
-
-    # Create output neurons
-    for _ in range(params.num_output):
-        while True:
-            pos = Position(
-                x=float(np.random.randint(0, int(params.volume_size))),
-                y=float(np.random.randint(0, int(params.volume_size))),
-                z=float(np.random.randint(0, int(params.volume_size)))
-            )
-            if not is_position_occupied(pos):
-                add_position(pos)
-                break
-
-        output_neuron = Neuron(id_counter, NeuronType.OUTPUT, pos, params)
-        output_neuron.radius = 0.0
-        output_neuron.radius_mutable = False
-        network.add_neuron(output_neuron)
-        id_counter += 1
-
-        if animate:
-            network.update_connections()
-            network_animator.capture_frame(network)
-
-    network.update_connections()
-
-    # Capture final state
-    if animate:
-        network_animator.capture_frame(network)
-        print(f"Network creation complete - captured {len(network_animator.frames)} frames")
-
-    return network
 
     def add_position(position: Position):
         position_key = (int(position.x), int(position.y), int(position.z))
