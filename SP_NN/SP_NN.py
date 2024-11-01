@@ -10,9 +10,8 @@ import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from matplotlib.colors import Normalize
 from mpl_toolkits.mplot3d.art3d import Line3DCollection
-from matplotlib.animation import FuncAnimation
 import matplotlib
-matplotlib.use('Agg')
+
 
 # Neuron type enumeration
 class NeuronType(Enum):
@@ -119,6 +118,9 @@ class SpatialNeuralNetwork:
     def __init__(self, params: NetworkParameters):
         # Network parameters
         self.params = params
+        
+        # Add frame counter
+        self.frame_counter = 1
 
         # Neuron collections
         self.neurons: Dict[int, Neuron] = {}
@@ -173,6 +175,45 @@ class SpatialNeuralNetwork:
                 }
             }
 
+    def log_network_state(self):
+        """Log detailed network state including neuron positions, connections, weights, and radii."""
+        log_dir = "network_logs"
+        if not os.path.exists(log_dir):
+            os.makedirs(log_dir)
+            
+        log_file = os.path.join(log_dir, "network_state.csv")
+        file_exists = os.path.exists(log_file)
+        
+        with open(log_file, 'a', newline='') as f:
+            fieldnames = [
+                'frame', 'neuron_id', 'type', 'x', 'y', 'z', 
+                'radius', 'activation', 'radius_mutable',
+                'connected_to', 'connection_weights'
+            ]
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            
+            if not file_exists:
+                writer.writeheader()
+            
+            for neuron_id, neuron in self.neurons.items():
+                connected_to = [n.id for n in neuron.connections]
+                connection_weights = [neuron.calculate_weight(n) for n in neuron.connections]
+                
+                row = {
+                    'frame': self.frame_counter,
+                    'neuron_id': neuron_id,
+                    'type': neuron.type.value,
+                    'x': neuron.position.x,
+                    'y': neuron.position.y,
+                    'z': neuron.position.z,
+                    'radius': neuron.radius,
+                    'activation': neuron.activation,
+                    'radius_mutable': neuron.radius_mutable,
+                    'connected_to': ','.join(map(str, connected_to)),
+                    'connection_weights': ','.join(map(str, connection_weights))
+                }
+                writer.writerow(row)
+
     def update_neuron_positions(self, new_positions: dict) -> None:
         with self.neuron_lock:
             for neuron_id, new_pos in new_positions.items():
@@ -183,7 +224,6 @@ class SpatialNeuralNetwork:
                         z=new_pos[2]
                     )
         self.update_connections()
-
 
     def get_hidden_neuron_positions(self) -> Dict[int, Tuple[float, float, float]]:
         with self.neuron_lock:
@@ -235,6 +275,13 @@ class SpatialNeuralNetwork:
                 for i in range(len(neuron_list))
             ]
             concurrent.futures.wait(futures)
+
+            # Log network state and increment frame counter
+            try:
+                self.log_network_state()
+                self.frame_counter += 1
+            except Exception as e:
+                print(f"Warning: Failed to log network state: {e}")
 
     def run_cycle(self, inputs: Optional[List[float]] = None) -> List[float]:
         with self.activation_lock:
@@ -399,115 +446,6 @@ class SpatialNeuralNetwork:
             connectivity_percentage = int((reachable_count / total_neurons) * 100)
 
             return connectivity_percentage
-
-
-class NetworkAnimator:
-    def __init__(self):
-        self.frames = []
-        self.fig = None
-        self.is_recording = False
-
-    def start_recording(self):
-        self.frames = []
-        self.is_recording = True
-
-    def stop_recording(self):
-        self.is_recording = False
-
-    def capture_frame(self, network: 'SpatialNeuralNetwork'):
-        if not self.is_recording:
-            return
-
-        fig = plt.figure(figsize=(12, 8))
-        ax = fig.add_subplot(111, projection='3d')
-
-        # Plot the network state
-        color_map = {
-            NeuronType.INPUT: 'red',
-            NeuronType.HIDDEN: 'blue',
-            NeuronType.OUTPUT: 'green'
-        }
-
-        # Plot neurons and connections
-        weights = [neuron.calculate_weight(target)
-                   for neuron in network.neurons.values()
-                   for target in neuron.connections]
-        if not weights:
-            weights = [0.0]
-
-        norm = Normalize(vmin=min(weights), vmax=max(weights))
-        cmap = plt.get_cmap('viridis')
-        line_segments = []
-        colors = []
-
-        # Plot neurons
-        for neuron in network.neurons.values():
-            color = 'cyan' if neuron in network.interface_neurons else color_map[neuron.type]
-            ax.scatter(neuron.position.x, neuron.position.y, neuron.position.z,
-                       color=color, s=50)
-
-            # Plot connections
-            for target in neuron.connections:
-                xs = [neuron.position.x, target.position.x]
-                ys = [neuron.position.y, target.position.y]
-                zs = [neuron.position.z, target.position.z]
-                line_segments.append(list(zip(xs, ys, zs)))
-                weight = neuron.calculate_weight(target)
-                colors.append(weight)
-
-        if line_segments:
-            lc = Line3DCollection(line_segments, cmap=cmap, norm=norm)
-            lc.set_array(np.array(colors))
-            ax.add_collection(lc)
-
-        # Set labels and title
-        ax.set_xlabel('X')
-        ax.set_ylabel('Y')
-        ax.set_zlabel('Z')
-        ax.set_title(f'Network State - Step {len(self.frames)}')
-
-        # Set consistent view limits
-        ax.set_xlim(0, network.params.volume_size)
-        ax.set_ylim(0, network.params.volume_size)
-        ax.set_zlim(0, network.params.volume_size)
-
-        # Capture the figure
-        self.frames.append(fig)
-        plt.close(fig)
-
-    def save_animation(self, filename='network_evolution.mp4', fps=5):
-        if not self.frames:
-            print("No frames to animate")
-            return
-
-        print(f"Creating animation with {len(self.frames)} frames...")
-
-        # Create a new figure for the animation
-        fig = plt.figure(figsize=(12, 8))
-        ax = fig.add_subplot(111, projection='3d')
-
-        def update(frame):
-            ax.clear()
-            ax.set_xlabel('X')
-            ax.set_ylabel('Y')
-            ax.set_zlabel('Z')
-            # Copy content from saved frame
-            for artist in self.frames[frame].gca().get_children():
-                if isinstance(artist, (Line3DCollection, plt.Line2D)):
-                    ax.add_artist(artist)
-            return ax,
-
-        anim = FuncAnimation(fig, update, frames=len(self.frames),
-                             interval=1000 / fps, blit=True)
-
-        # Save animation
-        anim.save(filename, writer='ffmpeg', fps=fps)
-        plt.close()
-        print(f"Animation saved to {filename}")
-
-
-# Create a global animator instance
-network_animator = NetworkAnimator()
 
 def plot_network_with_weights(network: SpatialNeuralNetwork):
     import matplotlib.pyplot as plt
