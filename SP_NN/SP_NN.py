@@ -10,14 +10,17 @@ import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from matplotlib.colors import Normalize
 from mpl_toolkits.mplot3d.art3d import Line3DCollection
+import matplotlib
 import os
-import imageio.v2 as imageio
+import csv
+
 
 # Neuron type enumeration
 class NeuronType(Enum):
     INPUT = "input"
     HIDDEN = "hidden"
     OUTPUT = "output"
+
 
 # 3D position class
 @dataclass
@@ -30,6 +33,7 @@ class Position:
         return np.sqrt((self.x - other.x) ** 2 +
                        (self.y - other.y) ** 2 +
                        (self.z - other.z) ** 2)
+
 
 @dataclass
 class NetworkParameters:
@@ -48,8 +52,6 @@ class NetworkParameters:
     base_radius_shrink_rate: float = 0.95
     activation_radius_factor: float = 0.2
     activation_threshold: float = 0.5
-    enable_visualization: bool = False
-    visualization_dir: str = "network_evolution"
 
     print('Network initialized')
 
@@ -121,6 +123,9 @@ class SpatialNeuralNetwork:
         # Network parameters
         self.params = params
 
+        # Add frame counter
+        self.frame_counter = 1
+
         # Neuron collections
         self.neurons: Dict[int, Neuron] = {}
         self.input_neurons: Set[Neuron] = set()
@@ -144,7 +149,7 @@ class SpatialNeuralNetwork:
 
         # Thread pool for parallel operations
         self.pool = concurrent.futures.ThreadPoolExecutor(
-            max_workers=min(32, (params.total_neurons // 100) + 1)
+            max_workers=min(32, (params.total_neurons // 50) + 1)
         )
 
     def add_neuron(self, neuron: Neuron):
@@ -174,6 +179,45 @@ class SpatialNeuralNetwork:
                 }
             }
 
+    def log_network_state(self):
+        """Log detailed network state including neuron positions, connections, weights, and radii."""
+        log_dir = "network_logs"
+        if not os.path.exists(log_dir):
+            os.makedirs(log_dir)
+
+        log_file = os.path.join(log_dir, "network_state.csv")
+        file_exists = os.path.exists(log_file)
+
+        with open(log_file, 'a', newline='') as f:
+            fieldnames = [
+                'frame', 'neuron_id', 'type', 'x', 'y', 'z',
+                'radius', 'activation', 'radius_mutable',
+                'connected_to', 'connection_weights'
+            ]
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+
+            if not file_exists:
+                writer.writeheader()
+
+            for neuron_id, neuron in self.neurons.items():
+                connected_to = [n.id for n in neuron.connections]
+                connection_weights = [neuron.calculate_weight(n) for n in neuron.connections]
+
+                row = {
+                    'frame': self.frame_counter,
+                    'neuron_id': neuron_id,
+                    'type': neuron.type.value,
+                    'x': neuron.position.x,
+                    'y': neuron.position.y,
+                    'z': neuron.position.z,
+                    'radius': neuron.radius,
+                    'activation': neuron.activation,
+                    'radius_mutable': neuron.radius_mutable,
+                    'connected_to': ','.join(map(str, connected_to)),
+                    'connection_weights': ','.join(map(str, connection_weights))
+                }
+                writer.writerow(row)
+
     def update_neuron_positions(self, new_positions: dict) -> None:
         with self.neuron_lock:
             for neuron_id, new_pos in new_positions.items():
@@ -184,7 +228,6 @@ class SpatialNeuralNetwork:
                         z=new_pos[2]
                     )
         self.update_connections()
-
 
     def get_hidden_neuron_positions(self) -> Dict[int, Tuple[float, float, float]]:
         with self.neuron_lock:
@@ -236,6 +279,13 @@ class SpatialNeuralNetwork:
                 for i in range(len(neuron_list))
             ]
             concurrent.futures.wait(futures)
+
+            # Log network state and increment frame counter
+            try:
+                self.log_network_state()
+                self.frame_counter += 1
+            except Exception as e:
+                print(f"Warning: Failed to log network state: {e}")
 
     def run_cycle(self, inputs: Optional[List[float]] = None) -> List[float]:
         with self.activation_lock:
@@ -401,6 +451,7 @@ class SpatialNeuralNetwork:
 
             return connectivity_percentage
 
+
 def plot_network_with_weights(network: SpatialNeuralNetwork):
     import matplotlib.pyplot as plt
     from matplotlib.colors import Normalize
@@ -464,6 +515,7 @@ def plot_network_with_weights(network: SpatialNeuralNetwork):
     ax.set_ylabel('Y')
     ax.set_zlabel('Z')
     ax.set_title('3D Spatial Neural Network with Connection Weights Heatmap')
+
 
 def create_network(params: NetworkParameters) -> SpatialNeuralNetwork:
     network = SpatialNeuralNetwork(params)
@@ -561,14 +613,100 @@ def create_network(params: NetworkParameters) -> SpatialNeuralNetwork:
         id_counter += 1
 
     network.update_connections()
+
     return network
+
+    def add_position(position: Position):
+        position_key = (int(position.x), int(position.y), int(position.z))
+        occupied_positions.add(position_key)
+
+    # Create input and interface neurons
+    for _ in range(params.num_input):
+        # Generate unique position for input neuron using integer positions
+        while True:
+            input_pos = Position(
+                x=float(np.random.randint(0, int(params.volume_size))),
+                y=float(np.random.randint(0, int(params.volume_size))),
+                z=float(np.random.randint(0, int(params.volume_size)))
+            )
+            if not is_position_occupied(input_pos):
+                add_position(input_pos)
+                break
+
+        input_neuron = Neuron(id_counter, NeuronType.INPUT, input_pos, params)
+        input_neuron.radius = input_radius
+        input_neuron.radius_mutable = False
+        network.add_neuron(input_neuron)
+        id_counter += 1
+
+        # Generate unique position for interface neuron adjacent to input
+        while True:
+            # Pick a random adjacent position (including diagonals)
+            dx = np.random.randint(-1, 2)
+            dy = np.random.randint(-1, 2)
+            dz = np.random.randint(-1, 2)
+            interface_pos = Position(
+                x=float((int(input_pos.x) + dx) % int(params.volume_size)),
+                y=float((int(input_pos.y) + dy) % int(params.volume_size)),
+                z=float((int(input_pos.z) + dz) % int(params.volume_size))
+            )
+            if not is_position_occupied(interface_pos):
+                add_position(interface_pos)
+                break
+
+        interface_neuron = Neuron(id_counter, NeuronType.HIDDEN, interface_pos, params)
+        interface_neuron.radius = interface_radius
+        interface_neuron.radius_mutable = False
+        network.add_neuron(interface_neuron)
+        id_counter += 1
+
+    # Create hidden neurons
+    for _ in range(params.num_hidden):
+        while True:
+            pos = Position(
+                x=float(np.random.randint(0, int(params.volume_size))),
+                y=float(np.random.randint(0, int(params.volume_size))),
+                z=float(np.random.randint(0, int(params.volume_size)))
+            )
+            if not is_position_occupied(pos):
+                add_position(pos)
+                break
+
+        neuron = Neuron(id_counter, NeuronType.HIDDEN, pos, params)
+        min_hidden_radius = params.hidden_radius_range[0] * params.max_radius
+        max_hidden_radius = params.hidden_radius_range[1] * params.max_radius
+        neuron.radius = np.random.uniform(min_hidden_radius, max_hidden_radius)
+        network.add_neuron(neuron)
+        id_counter += 1
+
+    # Create output neurons
+    for _ in range(params.num_output):
+        while True:
+            pos = Position(
+                x=float(np.random.randint(0, int(params.volume_size))),
+                y=float(np.random.randint(0, int(params.volume_size))),
+                z=float(np.random.randint(0, int(params.volume_size)))
+            )
+            if not is_position_occupied(pos):
+                add_position(pos)
+                break
+
+        output_neuron = Neuron(id_counter, NeuronType.OUTPUT, pos, params)
+        output_neuron.radius = 0.0
+        output_neuron.radius_mutable = False
+        network.add_neuron(output_neuron)
+        id_counter += 1
+
+    network.update_connections()
+    return network
+
 
 if __name__ == "__main__":
     # Define consistent network parameters
     network_params = {
         'volume_size': 8.0,
-        'num_input': 100,      # Align with fitness function
-        'num_output': 4,       # Align with fitness function
+        'num_input': 100,  # Align with fitness function
+        'num_output': 4,  # Align with fitness function
         'total_neurons': 500,  # Align with fitness function
         'activation_budget': 1000,  # Ensure all necessary parameters are included
         'time_window_size': 100
