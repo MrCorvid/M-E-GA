@@ -11,6 +11,8 @@ from matplotlib.lines import Line2D
 from matplotlib.colors import Normalize
 from mpl_toolkits.mplot3d.art3d import Line3DCollection
 import matplotlib
+import os
+import csv
 
 
 # Neuron type enumeration
@@ -512,10 +514,8 @@ def plot_network_with_weights(network: SpatialNeuralNetwork):
     ax.set_title('3D Spatial Neural Network with Connection Weights Heatmap')
 
 
-def create_network(params: NetworkParameters, animate: bool = False) -> SpatialNeuralNetwork:
-    if animate:
-        network_animator.start_recording()
-
+def create_network(params: NetworkParameters) -> SpatialNeuralNetwork:
+    
     network = SpatialNeuralNetwork(params)
     id_counter = 0
 
@@ -573,9 +573,6 @@ def create_network(params: NetworkParameters, animate: bool = False) -> SpatialN
         network.add_neuron(interface_neuron)
         id_counter += 1
 
-        if animate:
-            network.update_connections()
-            network_animator.capture_frame(network)
 
     # Create hidden neurons
     for _ in range(params.num_hidden):
@@ -596,9 +593,7 @@ def create_network(params: NetworkParameters, animate: bool = False) -> SpatialN
         network.add_neuron(neuron)
         id_counter += 1
 
-        if animate and id_counter % 10 == 0:  # Capture every 10th hidden neuron addition
-            network.update_connections()
-            network_animator.capture_frame(network)
+        
 
     # Create output neurons
     for _ in range(params.num_output):
@@ -618,16 +613,7 @@ def create_network(params: NetworkParameters, animate: bool = False) -> SpatialN
         network.add_neuron(output_neuron)
         id_counter += 1
 
-        if animate:
-            network.update_connections()
-            network_animator.capture_frame(network)
-
     network.update_connections()
-
-    # Capture final state
-    if animate:
-        network_animator.capture_frame(network)
-        print(f"Network creation complete - captured {len(network_animator.frames)} frames")
 
     return network
 
