@@ -3,15 +3,121 @@ from dataclasses import dataclass
 import numpy as np
 from SP_NN import Position, NetworkParameters, create_network, NeuronType
 import sys
+import tkinter as tk
+from tkinter import ttk
+import threading
+import queue
+import time
+
+
+class NetworkMonitorWindow:
+    def __init__(self):
+        self.queue = queue.Queue()
+        # Start window in separate thread
+        self.thread = threading.Thread(target=self.create_window, daemon=True)
+        self.thread.start()
+
+    def create_window(self):
+        """Create the window and its components"""
+        try:
+            self.root = tk.Tk()
+            self.root.title("Network Health Monitor")
+            self.root.geometry("300x150")
+            self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+
+            # Configure main frame
+            self.frame = ttk.Frame(self.root, padding="10")
+            self.frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+
+            # Connectivity label
+            self.connectivity_label = ttk.Label(self.frame, text="Network Connectivity: 0%")
+            self.connectivity_label.grid(row=0, column=0, pady=10)
+
+            # Progress bar
+            self.progress = ttk.Progressbar(
+                self.frame,
+                length=200,
+                mode='determinate',
+                maximum=100
+            )
+            self.progress.grid(row=1, column=0, pady=10)
+
+            # Status label
+            self.status_label = ttk.Label(self.frame, text="Status: Initializing...")
+            self.status_label.grid(row=2, column=0, pady=10)
+
+            # Set up periodic queue check
+            self.check_queue()
+
+            # Start mainloop
+            self.root.mainloop()
+
+        except Exception as e:
+            print(f"Error creating monitor window: {e}")
+
+    def on_closing(self):
+        """Handle window closing"""
+        try:
+            self.root.quit()
+            self.root.destroy()
+        except:
+            pass
+
+    def check_queue(self):
+        """Check for updates in the queue"""
+        try:
+            while True:
+                try:
+                    value = self.queue.get_nowait()
+                    self._update_display(value)
+                except queue.Empty:
+                    break
+
+            # Schedule next check
+            try:
+                self.root.after(100, self.check_queue)
+            except:
+                pass  # Window might be closed
+        except Exception as e:
+            print(f"Error checking queue: {e}")
+
+    def update_connectivity(self, value):
+        """Thread-safe method to update the display"""
+        try:
+            self.queue.put(value)
+        except Exception as e:
+            print(f"Error updating connectivity: {e}")
+
+    def _update_display(self, value):
+        """Internal method to update GUI elements"""
+        try:
+            self.connectivity_label.config(text=f"Network Connectivity: {value:.1f}%")
+            self.progress['value'] = value
+
+            # Update status text and color based on connectivity
+            if value >= 70:
+                status = "Good"
+                color = "green"
+            elif value >= 30:
+                status = "Improving"
+                color = "orange"
+            else:
+                status = "Poor"
+                color = "red"
+
+            self.status_label.config(text=f"Status: {status}", foreground=color)
+        except Exception as e:
+            print(f"Error updating display: {e}")
+
 
 class NetworkEvolutionFitness:
     def __init__(
-        self,
-        network_params: Dict[str, any],
-        update_best_func=None,
-        max_path_length: int = 200,
-        path_step_reward: float = 0.5,
-        debug: bool = False
+            self,
+            network_params: Dict[str, any],
+            update_best_func=None,
+            max_path_length: int = 50,
+            path_step_reward: float = 1.00,
+            debug: bool = False
     ):
         """
         Initialize Phase 1 fitness evaluation focusing on network connectivity structure.
@@ -26,6 +132,17 @@ class NetworkEvolutionFitness:
         self.debug = debug
         self.update_best = update_best_func
 
+        # Create monitor window first
+        try:
+            self.monitor = NetworkMonitorWindow()
+            # Give the window a moment to initialize
+            time.sleep(0.1)
+        except Exception as e:
+            print(f"Warning: Could not create monitor window: {e}")
+            self.monitor = None
+
+        self._last_connectivity = 0
+
         # Path control parameters
         self.max_path_length = max_path_length
         self.path_step_reward = path_step_reward
@@ -39,7 +156,7 @@ class NetworkEvolutionFitness:
 
         # Create network parameters using the provided network_params dictionary
         self.network_params = NetworkParameters(
-            volume_size=network_params.get('volume_size', 8.0),
+            volume_size=network_params.get('volume_size', 10.0),
             num_input=network_params.get('num_input', 100),
             num_output=network_params.get('num_output', 4),
             total_neurons=network_params.get('total_neurons', 800),
@@ -47,7 +164,7 @@ class NetworkEvolutionFitness:
             min_radius=network_params.get('min_radius', 0.1),
             input_radius_factor=network_params.get('input_radius_factor', 0.25),
             interface_radius_factor=network_params.get('interface_radius_factor', 0.3),
-            hidden_radius_range=network_params.get('hidden_radius_range', (0.02, 0.90)),
+            hidden_radius_range=network_params.get('hidden_radius_range', (0.30, .60)),
             interface_offset=network_params.get('interface_offset', 1.0),
             activation_budget=network_params.get('activation_budget', 1000),
             time_window_size=network_params.get('time_window_size', 100),
@@ -61,29 +178,60 @@ class NetworkEvolutionFitness:
 
         # Initialize persistent path state
         self.pickup_bag = []
-        self.current_pos = Position(0.0, 0.0, 0.0)
+        self.current_pos = Position(0.0, 0.0, 0.0)  # Initial position at origin
 
     def calculate_connectivity_score(self) -> float:
         """Calculate network connectivity as a percentage (0-100)"""
         unreachable = self.network.compute_unreachable_neurons()
         total_neurons = len(self.network.neurons)
         if total_neurons == 0:
-            return 0.0
-        return (1.0 - (unreachable / total_neurons)) * 100
+            connectivity = 0.0
+        else:
+            connectivity = (1.0 - (unreachable / total_neurons)) * 100
+
+        # Update monitor if it exists and change is significant
+        try:
+            if self.monitor and abs(connectivity - self._last_connectivity) > 1:
+                self._last_connectivity = connectivity
+                self.monitor.update_connectivity(connectivity)
+        except Exception as e:
+            if self.debug:
+                print(f"Warning: Could not update monitor: {e}")
+
+        return connectivity
 
     def execute_path(self, path: List[str]) -> Dict:
         """Execute movement path to modify network structure"""
+        # Reset position to origin at start of each path
+        self.current_pos = Position(0.0, 0.0, 0.0)
+        # Clear pickup bag at start of each path
+        self.pickup_bag = []
+
         state = self.network.get_network_state()
         neuron_positions = state['neuron_positions']
         position_updates = {}
 
         # Tracking metrics
-        successful_steps = 0  # Counts moves and successful drops
-        failed_drops = 0      # Counts failed drop attempts
-        neurons_moved = 0     # Counts successfully moved neurons
+        moves_made = 0
+        pickups_made = 0
+        successful_drops = 0
+        failed_drops = 0
+        neurons_moved = 0
+        total_steps = 0
+        path_score = 0.0
+
+        # Track when we pass the step limit
+        step_limit_passed = False
 
         for command in path:
+            # Check if we're passing the step limit
+            if total_steps == self.max_path_length:
+                step_limit_passed = True
+                if self.debug:
+                    print(f"Step limit {self.max_path_length} passed - subsequent actions cost double")
+
             if command == 'DR' and self.pickup_bag:
+                total_steps += 1
                 current_pos_tuple = (
                     round(self.current_pos.x),
                     round(self.current_pos.y),
@@ -102,61 +250,72 @@ class NetworkEvolutionFitness:
                     neuron_id = self.pickup_bag.pop(0)
                     position_updates[neuron_id] = current_pos_tuple
                     neurons_moved += 1
-                    successful_steps += 1
+                    successful_drops += 1
+
+                    if not step_limit_passed:
+                        # Normal reward for successful drop within limit
+                        path_score += self.path_step_reward + (self.path_step_reward * 1.5)  # Base + bonus
+                    else:
+                        # Double negative reward for actions beyond limit
+                        path_score += -2 * self.path_step_reward
                 else:
-                    # Failed drop attempt
+                    # Failed drop
                     failed_drops += 1
+                    if step_limit_passed:
+                        # Failed drops beyond limit still incur the negative reward
+                        path_score += -2 * self.path_step_reward
+
             else:
                 # Movement command
                 new_pos = self.move(command)
                 if new_pos:
+                    total_steps += 1
+                    moves_made += 1
                     self.current_pos = new_pos
-                    successful_steps += 1
 
-                    # Pickup any neurons at current position
-                    current_pos_tuple = (
-                        round(self.current_pos.x),
-                        round(self.current_pos.y),
-                        round(self.current_pos.z)
-                    )
+                    if not step_limit_passed:
+                        # Normal reward for move within limit
+                        path_score += self.path_step_reward
 
-                    # Only pick up hidden neurons
-                    for nid, data in neuron_positions.items():
-                        neuron = self.network.neurons[nid]
-                        if (
-                            neuron.type == NeuronType.HIDDEN and
-                            nid not in self.pickup_bag and
-                            nid not in position_updates
-                        ):
-                            neuron_pos = tuple(round(x) for x in data['position'])
-                            if neuron_pos == current_pos_tuple:
-                                self.pickup_bag.append(nid)
-                                break
+                        # Check for pickups at current position
+                        current_pos_tuple = (
+                            round(self.current_pos.x),
+                            round(self.current_pos.y),
+                            round(self.current_pos.z)
+                        )
+
+                        # Only pick up hidden neurons
+                        for nid, data in neuron_positions.items():
+                            neuron = self.network.neurons[nid]
+                            if (
+                                    neuron.type == NeuronType.HIDDEN and
+                                    nid not in self.pickup_bag and
+                                    nid not in position_updates
+                            ):
+                                neuron_pos = tuple(round(x) for x in data['position'])
+                                if neuron_pos == current_pos_tuple:
+                                    self.pickup_bag.append(nid)
+                                    pickups_made += 1
+                                    path_score += self.path_step_reward * 0.5  # Pickup bonus
+                                    break
+                    else:
+                        # Double negative reward for moves beyond limit
+                        path_score += -2 * self.path_step_reward
 
         if position_updates:
             self.network.update_neuron_positions(position_updates)
 
-        # Calculate path score
-        path_score = 0.0
-
-        # Add rewards for successful steps (moves and drops)
-        path_score += successful_steps * self.path_step_reward
-
-        # Add penalties for failed drops
-        path_score += failed_drops * self.failed_drop_penalty
-
-        # Add penalties for exceeding max path length
-        if successful_steps > self.max_path_length:
-            excess_steps = successful_steps - self.max_path_length
-            path_score += excess_steps * self.step_penalty
-
         return {
             'path_score': path_score,
-            'successful_steps': successful_steps,
+            'moves_made': moves_made,
+            'pickups_made': pickups_made,
+            'successful_drops': successful_drops,
             'failed_drops': failed_drops,
             'neurons_moved': neurons_moved,
             'total_neurons': len(self.network.neurons),
-            'pickup_bag_size': len(self.pickup_bag)
+            'pickup_bag_size': len(self.pickup_bag),
+            'total_steps': total_steps,
+            'excess_steps': total_steps - self.max_path_length if step_limit_passed else 0
         }
 
     def compute(self, encoded_individual, ga_instance) -> float:
@@ -185,16 +344,16 @@ class NetworkEvolutionFitness:
                 print("\nExiting Phase 1: Achieved 100% network connectivity")
                 print(f"Final Stats:")
                 print(f"Neurons Moved: {movement_results['neurons_moved']}")
-                print(f"Path Length: {movement_results['successful_steps']}")
+                print(f"Path Length: {movement_results['total_steps']}")
                 print(f"Failed Drops: {movement_results['failed_drops']}")
             sys.exit(0)  # Clean exit after achieving goal
 
         # Final fitness is the connectivity percentage plus raw path score
-        fitness = connectivity_score + path_score
+        fitness = (connectivity_score*3) + path_score
 
         if self.debug:
             print(f"\nFitness Calculation Details:")
-            print(f"Path Length: {movement_results['successful_steps']}")
+            print(f"Path Length: {movement_results['total_steps']}")
             print(f"Successful Drops: {movement_results['neurons_moved']}")
             print(f"Failed Drops: {movement_results['failed_drops']}")
             print(f"Raw Path Score: {path_score:.2f}")
@@ -239,11 +398,11 @@ class NetworkEvolutionFitness:
             'network': {
                 'total_neurons': len(self.network.neurons),
                 'input_neurons': len([n for n in self.network.neurons.values()
-                                      if n.type == NeuronType.INPUT]),
+                                    if n.type == NeuronType.INPUT]),
                 'output_neurons': len([n for n in self.network.neurons.values()
-                                       if n.type == NeuronType.OUTPUT]),
+                                     if n.type == NeuronType.OUTPUT]),
                 'hidden_neurons': len([n for n in self.network.neurons.values()
-                                       if n.type == NeuronType.HIDDEN])
+                                     if n.type == NeuronType.HIDDEN])
             },
             'current_state': {
                 'pickup_bag_size': len(self.pickup_bag),

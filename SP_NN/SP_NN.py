@@ -37,15 +37,15 @@ class Position:
 
 @dataclass
 class NetworkParameters:
-    volume_size: float = 10.0
+    volume_size: float = 20.0
     num_input: int = 100
     num_output: int = 20
     total_neurons: int = 800
-    max_radius: float = 8.0
+    max_radius: float = 3.0
     min_radius: float = 0.1
     input_radius_factor: float = 0.25
     interface_radius_factor: float = 1
-    hidden_radius_range: Tuple[float, float] = (0.99, 0.100)
+    hidden_radius_range: Tuple[float, float] = (0.10, 0.80)
     interface_offset: float = 1.
     activation_budget: int = 1000
     time_window_size: int = 100
@@ -149,7 +149,7 @@ class SpatialNeuralNetwork:
 
         # Thread pool for parallel operations
         self.pool = concurrent.futures.ThreadPoolExecutor(
-            max_workers=min(32, (params.total_neurons // 50) + 1)
+            max_workers=min(50, (params.total_neurons // 50) + 1)
         )
 
     def add_neuron(self, neuron: Neuron):

@@ -12,13 +12,13 @@ class ExperimentRunner:
         # Input/Output neuron counts are managed by fitness class based on simulation requirements
         self.network_params = {
             # Core network structure
-            'volume_size': 8.0,
+            'volume_size': 10.0,
             'total_neurons': 400,
 
             # Neuron radius parameters
             'max_radius': 3.0,
-            'min_radius': 0.1,
-            'hidden_radius_range': (0.02, 0.90),
+            'min_radius': 0.01,
+            'hidden_radius_range': (1.00, 1.0),
             'base_radius_shrink_rate': 0.95,
 
             # Activation parameters
@@ -31,19 +31,19 @@ class ExperimentRunner:
         # GA configuration remains the same
         self.ga_config = {
             'mutation_prob': 0.15,
-            'delimited_mutation_prob': 0.08,
-            'open_mutation_prob': 0.05,
-            'capture_mutation_prob': 0.04,
+            'delimited_mutation_prob': 0.10,
+            'open_mutation_prob': 0.06,
+            'capture_mutation_prob': 0.1,
             'delimiter_insert_prob': 0.07,
-            'delimit_delete_prob': 0.5,
+            'delimit_delete_prob': 0.05,
             'crossover_prob': 0.0,
             'elitism_ratio': 0.0,
-            'base_gene_prob': 0.15,
-            'capture_gene_prob': 0.03,
-            'max_individual_length': 100,
-            'population_size': 500,
-            'num_parents': 100,
-            'max_generations': 20,
+            'base_gene_prob': 0.25,
+            'capture_gene_prob': 0.04,
+            'max_individual_length': 50,
+            'population_size': 700,
+            'num_parents': 400,
+            'max_generations': 1000,
             'delimiters': False,
             'delimiter_space': 2,
             'logging': False,
@@ -87,8 +87,8 @@ class ExperimentRunner:
         self.fitness_function = NetworkEvolutionFitness(
             network_params=self.network_params,
             update_best_func=self.update_best_organism,
-            max_path_length=90,
-            path_step_reward=0.01,
+            max_path_length=70,
+            path_step_reward=1.0,
             debug=self.debug  # Pass debug flag to fitness function
         )
 
