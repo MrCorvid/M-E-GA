@@ -12,14 +12,17 @@ class ExperimentRunner:
         # Input/Output neuron counts are managed by fitness class based on simulation requirements
         self.network_params = {
             # Core network structure
-            'volume_size': 10.0,
-            'total_neurons': 400,
+            'volume_size': 15.0,
+            'total_neurons': 300,
 
             # Neuron radius parameters
             'max_radius': 3.0,
             'min_radius': 0.01,
-            'hidden_radius_range': (1.00, 1.0),
+            'hidden_radius_range': (0.30, 0.60),
             'base_radius_shrink_rate': 0.95,
+            'input_radius_factor': .60,
+            'interface_radius_factor': .60,
+            'interface_offset': 1.0,
 
             # Activation parameters
             'activation_budget': 1000,
@@ -30,25 +33,25 @@ class ExperimentRunner:
 
         # GA configuration remains the same
         self.ga_config = {
-            'mutation_prob': 0.15,
-            'delimited_mutation_prob': 0.10,
-            'open_mutation_prob': 0.06,
-            'capture_mutation_prob': 0.1,
-            'delimiter_insert_prob': 0.07,
-            'delimit_delete_prob': 0.05,
-            'crossover_prob': 0.0,
-            'elitism_ratio': 0.0,
-            'base_gene_prob': 0.25,
-            'capture_gene_prob': 0.04,
-            'max_individual_length': 50,
-            'population_size': 700,
-            'num_parents': 400,
-            'max_generations': 1000,
-            'delimiters': False,
-            'delimiter_space': 2,
-            'logging': False,
-            'experiment_name': 'neural_evolution',
-            'seed': None
+        'mutation_prob': 0.15,
+        'delimited_mutation_prob': 0.10,
+        'open_mutation_prob': 0.10,
+        'capture_mutation_prob': 0.08,
+        'delimiter_insert_prob': 0.04,
+        'delimit_delete_prob': 0.04,
+        'crossover_prob': 0.00,
+        'elitism_ratio': 0.00,
+        'base_gene_prob': 0.50,
+        'capture_gene_prob': 0.05,
+        'max_individual_length': 100,
+        'population_size': 500,
+        'num_parents': 200,
+        'max_generations': 1000,
+        'delimiters': False,
+        'delimiter_space': 2,
+        'logging': False,
+        'experiment_name': 'neural_evolution',
+        'seed': None
         }
 
         # Best solution tracking
