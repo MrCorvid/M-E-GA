@@ -202,7 +202,7 @@ class SpatialNeuralNetwork:
         with self.connection_lock:
             with self.neuron_lock:
                 positions = np.array([[n.position.x, n.position.y, n.position.z]
-                                      for n in self.neurons.values()])
+                                    for n in self.neurons.values()])
                 neuron_list = list(self.neurons.values())
 
             if len(positions) == 0:
@@ -244,7 +244,7 @@ class SpatialNeuralNetwork:
                     return input_neuron.try_activate(input_value, self)
 
             input_pairs = list(zip(self.input_neurons,
-                                   [np.clip(x, 0.0, 1.0) for x in inputs]))
+                                 [np.clip(x, 0.0, 1.0) for x in inputs]))
             futures = [
                 self.pool.submit(process_input, pair)
                 for pair in input_pairs
@@ -358,45 +358,41 @@ class SpatialNeuralNetwork:
 
     def compute_unreachable_neurons(self) -> int:
         """
-        Computes the connectivity percentage of the network (how many neurons can be reached from outputs).
-        Returns:
-            int: Connectivity percentage (0-100). 100 means all neurons are reachable.
+        Computes unreachable neurons using component counting.
+        Formula: ((N-C)/(N-1)) maps to connectivity
+        Returns number of unreachable neurons.
         """
         with self.neuron_lock:
-            reachable_neurons = set()
-
-            # Initialize queue with output neurons
-            queue = deque(self.output_neurons)
-            for output_neuron in self.output_neurons:
-                reachable_neurons.add(output_neuron.id)
-
-            # Track neurons we've already processed to avoid cycles
-            processed = set()
-
-            while queue:
-                current_neuron = queue.popleft()
-                if current_neuron.id in processed:
-                    continue
-
-                processed.add(current_neuron.id)
-
-                # Traverse incoming connections: find neurons that connect to current_neuron
-                for neuron in self.neurons.values():
-                    if current_neuron in neuron.connections:
-                        if neuron.id not in reachable_neurons:
-                            reachable_neurons.add(neuron.id)
-                            queue.append(neuron)
-
-            # Calculate connectivity percentage
-            total_neurons = len(self.neurons)
-            if total_neurons == 0:  # Prevent division by zero
+            N = len(self.neurons)
+            if N == 0:
                 return 0
 
-            reachable_count = len(reachable_neurons)
-            connectivity_percentage = int((reachable_count / total_neurons) * 100)
+            # Initialize Union-Find (using neuron IDs)
+            parent = {neuron.id: neuron.id for neuron in self.neurons.values()}
+            
+            # Find with path compression
+            def find(x):
+                if parent[x] != x:
+                    parent[x] = find(parent[x])
+                return parent[x]
 
-            return connectivity_percentage
+            # Union neurons based on connections
+            for neuron in self.neurons.values():
+                neuron_id = neuron.id
+                for target in neuron.connections:
+                    # Connect both ways
+                    pid = find(neuron_id)
+                    tid = find(target.id)
+                    if pid != tid:
+                        parent[tid] = pid
 
+            # Count unique components
+            C = len(set(find(x) for x in parent))
+            
+            # Directly calculate unreachable neurons from component count
+            # When C = 1 (fully connected), unreachable = 0
+            # When C = N (fully disconnected), unreachable = N
+            return N - int((N - C) * N / (N - 1))
 
 def plot_network_with_weights(network: SpatialNeuralNetwork):
     import matplotlib.pyplot as plt
