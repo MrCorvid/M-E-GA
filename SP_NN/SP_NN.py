@@ -10,9 +10,6 @@ import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from matplotlib.colors import Normalize
 from mpl_toolkits.mplot3d.art3d import Line3DCollection
-import matplotlib
-import os
-import csv
 
 
 # Neuron type enumeration
@@ -52,8 +49,6 @@ class NetworkParameters:
     base_radius_shrink_rate: float = 0.95
     activation_radius_factor: float = 0.2
     activation_threshold: float = 0.5
-
-    print('Network initialized')
 
     @property
     def num_hidden(self) -> int:
@@ -123,9 +118,6 @@ class SpatialNeuralNetwork:
         # Network parameters
         self.params = params
 
-        # Add frame counter
-        self.frame_counter = 1
-
         # Neuron collections
         self.neurons: Dict[int, Neuron] = {}
         self.input_neurons: Set[Neuron] = set()
@@ -178,45 +170,6 @@ class SpatialNeuralNetwork:
                     for neuron in self.neurons.values()
                 }
             }
-
-    def log_network_state(self):
-        """Log detailed network state including neuron positions, connections, weights, and radii."""
-        log_dir = "network_logs"
-        if not os.path.exists(log_dir):
-            os.makedirs(log_dir)
-
-        log_file = os.path.join(log_dir, "network_state.csv")
-        file_exists = os.path.exists(log_file)
-
-        with open(log_file, 'a', newline='') as f:
-            fieldnames = [
-                'frame', 'neuron_id', 'type', 'x', 'y', 'z',
-                'radius', 'activation', 'radius_mutable',
-                'connected_to', 'connection_weights'
-            ]
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-
-            if not file_exists:
-                writer.writeheader()
-
-            for neuron_id, neuron in self.neurons.items():
-                connected_to = [n.id for n in neuron.connections]
-                connection_weights = [neuron.calculate_weight(n) for n in neuron.connections]
-
-                row = {
-                    'frame': self.frame_counter,
-                    'neuron_id': neuron_id,
-                    'type': neuron.type.value,
-                    'x': neuron.position.x,
-                    'y': neuron.position.y,
-                    'z': neuron.position.z,
-                    'radius': neuron.radius,
-                    'activation': neuron.activation,
-                    'radius_mutable': neuron.radius_mutable,
-                    'connected_to': ','.join(map(str, connected_to)),
-                    'connection_weights': ','.join(map(str, connection_weights))
-                }
-                writer.writerow(row)
 
     def update_neuron_positions(self, new_positions: dict) -> None:
         with self.neuron_lock:
@@ -279,13 +232,6 @@ class SpatialNeuralNetwork:
                 for i in range(len(neuron_list))
             ]
             concurrent.futures.wait(futures)
-
-            # Log network state and increment frame counter
-            try:
-                self.log_network_state()
-                self.frame_counter += 1
-            except Exception as e:
-                print(f"Warning: Failed to log network state: {e}")
 
     def run_cycle(self, inputs: Optional[List[float]] = None) -> List[float]:
         with self.activation_lock:
@@ -497,8 +443,6 @@ def plot_network_with_weights(network: SpatialNeuralNetwork):
         ax.add_collection(lc)
         # Add colorbar for weights
         cbar = fig.colorbar(lc, ax=ax, label='Connection Weight')
-    else:
-        print("No connections to plot.")
     # Add legend
     legend_elements = [
         Line2D([0], [0], marker='o', color='w', markerfacecolor='red',
@@ -613,91 +557,6 @@ def create_network(params: NetworkParameters) -> SpatialNeuralNetwork:
         id_counter += 1
 
     network.update_connections()
-
-    return network
-
-    def add_position(position: Position):
-        position_key = (int(position.x), int(position.y), int(position.z))
-        occupied_positions.add(position_key)
-
-    # Create input and interface neurons
-    for _ in range(params.num_input):
-        # Generate unique position for input neuron using integer positions
-        while True:
-            input_pos = Position(
-                x=float(np.random.randint(0, int(params.volume_size))),
-                y=float(np.random.randint(0, int(params.volume_size))),
-                z=float(np.random.randint(0, int(params.volume_size)))
-            )
-            if not is_position_occupied(input_pos):
-                add_position(input_pos)
-                break
-
-        input_neuron = Neuron(id_counter, NeuronType.INPUT, input_pos, params)
-        input_neuron.radius = input_radius
-        input_neuron.radius_mutable = False
-        network.add_neuron(input_neuron)
-        id_counter += 1
-
-        # Generate unique position for interface neuron adjacent to input
-        while True:
-            # Pick a random adjacent position (including diagonals)
-            dx = np.random.randint(-1, 2)
-            dy = np.random.randint(-1, 2)
-            dz = np.random.randint(-1, 2)
-            interface_pos = Position(
-                x=float((int(input_pos.x) + dx) % int(params.volume_size)),
-                y=float((int(input_pos.y) + dy) % int(params.volume_size)),
-                z=float((int(input_pos.z) + dz) % int(params.volume_size))
-            )
-            if not is_position_occupied(interface_pos):
-                add_position(interface_pos)
-                break
-
-        interface_neuron = Neuron(id_counter, NeuronType.HIDDEN, interface_pos, params)
-        interface_neuron.radius = interface_radius
-        interface_neuron.radius_mutable = False
-        network.add_neuron(interface_neuron)
-        id_counter += 1
-
-    # Create hidden neurons
-    for _ in range(params.num_hidden):
-        while True:
-            pos = Position(
-                x=float(np.random.randint(0, int(params.volume_size))),
-                y=float(np.random.randint(0, int(params.volume_size))),
-                z=float(np.random.randint(0, int(params.volume_size)))
-            )
-            if not is_position_occupied(pos):
-                add_position(pos)
-                break
-
-        neuron = Neuron(id_counter, NeuronType.HIDDEN, pos, params)
-        min_hidden_radius = params.hidden_radius_range[0] * params.max_radius
-        max_hidden_radius = params.hidden_radius_range[1] * params.max_radius
-        neuron.radius = np.random.uniform(min_hidden_radius, max_hidden_radius)
-        network.add_neuron(neuron)
-        id_counter += 1
-
-    # Create output neurons
-    for _ in range(params.num_output):
-        while True:
-            pos = Position(
-                x=float(np.random.randint(0, int(params.volume_size))),
-                y=float(np.random.randint(0, int(params.volume_size))),
-                z=float(np.random.randint(0, int(params.volume_size)))
-            )
-            if not is_position_occupied(pos):
-                add_position(pos)
-                break
-
-        output_neuron = Neuron(id_counter, NeuronType.OUTPUT, pos, params)
-        output_neuron.radius = 0.0
-        output_neuron.radius_mutable = False
-        network.add_neuron(output_neuron)
-        id_counter += 1
-
-    network.update_connections()
     return network
 
 
@@ -723,21 +582,11 @@ if __name__ == "__main__":
     )
     network = create_network(params)
 
-    print(f"Network created with:")
-    print(f"- {len(network.input_neurons)} input neurons")
-    print(f"- {len(network.hidden_neurons)} hidden neurons")
-    print(f"- {len(network.interface_neurons)} interface neurons")
-    print(f"- {len(network.output_neurons)} output neurons")
-
     # Compute number of unreachable neurons
     unreachable_neurons = network.compute_unreachable_neurons()
-    print(f"Number of unreachable neurons: {unreachable_neurons}")
 
     # Get positions of hidden neurons
     hidden_positions = network.get_hidden_neuron_positions()
-    print("\nPositions of hidden neurons:")
-    for neuron_id, pos in hidden_positions.items():
-        print(f"Neuron {neuron_id}: Position {pos}")
 
     # Example: Modify positions of hidden neurons (e.g., move them randomly)
     modified_positions = {}
@@ -753,7 +602,6 @@ if __name__ == "__main__":
 
     # Recompute number of unreachable neurons after modification
     unreachable_neurons_after = network.compute_unreachable_neurons()
-    print(f"\nNumber of unreachable neurons after modification: {unreachable_neurons_after}")
 
     # Plot the network
     plot_network_with_weights(network)
