@@ -13,12 +13,12 @@ class ExperimentRunner:
         self.network_params = {
             # Core network structure
             'volume_size': 15.0,
-            'total_neurons': 300,
+            'total_neurons': 400,
 
             # Neuron radius parameters
             'max_radius': 3.0,
-            'min_radius': 0.01,
-            'hidden_radius_range': (0.30, 0.60),
+            'min_radius': 1.0,
+            'hidden_radius_range': (0.10, 0.50),
             'base_radius_shrink_rate': 0.95,
             'input_radius_factor': .60,
             'interface_radius_factor': .60,
@@ -35,14 +35,14 @@ class ExperimentRunner:
         self.ga_config = {
         'mutation_prob': 0.15,
         'delimited_mutation_prob': 0.10,
-        'open_mutation_prob': 0.10,
-        'capture_mutation_prob': 0.08,
+        'open_mutation_prob': 0.05,
+        'capture_mutation_prob': 0.03,
         'delimiter_insert_prob': 0.04,
-        'delimit_delete_prob': 0.04,
+        'delimit_delete_prob': 0.03,
         'crossover_prob': 0.00,
         'elitism_ratio': 0.00,
-        'base_gene_prob': 0.50,
-        'capture_gene_prob': 0.05,
+        'base_gene_prob': 0.30,
+        'capture_gene_prob': 0.01,
         'max_individual_length': 100,
         'population_size': 500,
         'num_parents': 200,

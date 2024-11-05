@@ -115,8 +115,13 @@ class NetworkEvolutionFitness:
             self,
             network_params: Dict[str, any],
             update_best_func=None,
-            max_path_length: int = 50,
+            max_path_length: int = 300,
             path_step_reward: float = 1.00,
+            pickup_reward: float = 3.,               # Reward for picking up a neuron
+            successful_drop_reward: float = 10.,      # Reward for a successful drop
+            failed_drop_penalty: float = -0.,        # Penalty for a failed drop
+            empty_bag_reward: float = 10.00,            # Reward for emptying the pickup bag
+            step_penalty: float = -11.00,               # Penalty for steps beyond max_path_length
             debug: bool = False
     ):
         """
@@ -127,29 +132,25 @@ class NetworkEvolutionFitness:
             update_best_func (callable, optional): Function to update the best individuals.
             max_path_length (int): Maximum allowed path length before applying penalties.
             path_step_reward (float): Reward for each successful path step.
+            pickup_reward (float): Reward for each neuron picked up.
+            successful_drop_reward (float): Reward for a successful drop action.
+            failed_drop_penalty (float): Penalty for a failed drop action.
+            empty_bag_reward (float): Reward for having zero neurons in the pickup bag.
+            step_penalty (float): Penalty for movements beyond the maximum path length.
             debug (bool): Enable debug output printing.
         """
-        self.debug = debug
-        self.update_best = update_best_func
-
-        # Create monitor window first
-        try:
-            self.monitor = NetworkMonitorWindow()
-            # Give the window a moment to initialize
-            time.sleep(0.1)
-        except Exception as e:
-            print(f"Warning: Could not create monitor window: {e}")
-            self.monitor = None
-
-        self._last_connectivity = 0
-
-        # Path control parameters
+        # Centralized Reward, Penalty, and Parameter Definitions
         self.max_path_length = max_path_length
         self.path_step_reward = path_step_reward
+        self.pickup_reward = pickup_reward
+        self.successful_drop_reward = successful_drop_reward
+        self.failed_drop_penalty = failed_drop_penalty
+        self.empty_bag_reward = empty_bag_reward
+        self.step_penalty = step_penalty
 
-        # Define path penalties
-        self.failed_drop_penalty = -path_step_reward
-        self.step_penalty = -2 * path_step_reward
+        # Debug and Update Function
+        self.debug = debug
+        self.update_best = update_best_func
 
         # Define genes for path evolution
         self.genes = ['U', 'D', 'F', 'B', 'DR']
@@ -179,6 +180,19 @@ class NetworkEvolutionFitness:
         # Initialize persistent path state
         self.pickup_bag = []
         self.current_pos = Position(0.0, 0.0, 0.0)  # Initial position at origin
+
+        # Create monitor window first
+        try:
+            self.monitor = NetworkMonitorWindow()
+            # Give the window a moment to initialize
+            time.sleep(0.1)
+        except Exception as e:
+            if self.debug:
+                print(f"Warning: Could not create monitor window: {e}")
+            self.monitor = None
+
+        # Initialize last connectivity score
+        self._last_connectivity = 0
 
     def calculate_connectivity_score(self) -> float:
         """Calculate network connectivity as a percentage (0-100)"""
@@ -253,17 +267,20 @@ class NetworkEvolutionFitness:
                     successful_drops += 1
 
                     if not step_limit_passed:
-                        # Normal reward for successful drop within limit
-                        path_score += self.path_step_reward + (self.path_step_reward * 1.5)  # Base + bonus
+                        # Reward for successful drop within limit
+                        path_score += self.successful_drop_reward
                     else:
-                        # Double negative reward for actions beyond limit
-                        path_score += -2 * self.path_step_reward
+                        # Penalty for successful drop beyond limit
+                        path_score += self.failed_drop_penalty
                 else:
                     # Failed drop
                     failed_drops += 1
                     if step_limit_passed:
-                        # Failed drops beyond limit still incur the negative reward
-                        path_score += -2 * self.path_step_reward
+                        # Penalty for failed drop beyond limit
+                        path_score += self.failed_drop_penalty
+                    else:
+                        # Optional: You can decide whether to penalize failed drops within limit
+                        path_score += self.failed_drop_penalty  # Applying penalty regardless of step limit
 
             else:
                 # Movement command
@@ -274,7 +291,7 @@ class NetworkEvolutionFitness:
                     self.current_pos = new_pos
 
                     if not step_limit_passed:
-                        # Normal reward for move within limit
+                        # Reward for move within limit
                         path_score += self.path_step_reward
 
                         # Check for pickups at current position
@@ -296,11 +313,21 @@ class NetworkEvolutionFitness:
                                 if neuron_pos == current_pos_tuple:
                                     self.pickup_bag.append(nid)
                                     pickups_made += 1
-                                    path_score += self.path_step_reward * 0.5  # Pickup bonus
+                                    # Apply pickup reward
+                                    path_score += self.pickup_reward
                                     break
                     else:
-                        # Double negative reward for moves beyond limit
-                        path_score += -2 * self.path_step_reward
+                        # Penalty for move beyond limit
+                        path_score += self.step_penalty
+
+        # Apply reward for empty pickup bag at the end
+        if not self.pickup_bag:
+            path_score += self.empty_bag_reward
+            if self.debug:
+                print("Empty pickup bag reward applied.")
+        else:
+            if self.debug:
+                print(f"Pickup bag not empty. Remaining neurons: {len(self.pickup_bag)}")
 
         if position_updates:
             self.network.update_neuron_positions(position_updates)
@@ -321,7 +348,7 @@ class NetworkEvolutionFitness:
     def compute(self, encoded_individual, ga_instance) -> float:
         """
         Phase 1 fitness computation. Final fitness is:
-        fitness = connectivity_score + path_score
+        fitness = (connectivity_score + path_score) ** 3
 
         connectivity_score: 0-100 (percentage of reachable neurons)
         path_score: raw score based on steps, drops, and penalties
@@ -349,7 +376,7 @@ class NetworkEvolutionFitness:
             sys.exit(0)  # Clean exit after achieving goal
 
         # Final fitness is the connectivity percentage plus raw path score
-        fitness = (connectivity_score*3) + path_score
+        fitness =   fitness = abs(path_score) ** (connectivity_score * 0.05)
 
         if self.debug:
             print(f"\nFitness Calculation Details:")
@@ -392,17 +419,20 @@ class NetworkEvolutionFitness:
             'path': {
                 'max_length': self.max_path_length,
                 'step_reward': self.path_step_reward,
+                'pickup_reward': self.pickup_reward,
+                'successful_drop_reward': self.successful_drop_reward,
                 'failed_drop_penalty': self.failed_drop_penalty,
+                'empty_bag_reward': self.empty_bag_reward,
                 'step_penalty': self.step_penalty
             },
             'network': {
                 'total_neurons': len(self.network.neurons),
                 'input_neurons': len([n for n in self.network.neurons.values()
-                                    if n.type == NeuronType.INPUT]),
+                                      if n.type == NeuronType.INPUT]),
                 'output_neurons': len([n for n in self.network.neurons.values()
-                                     if n.type == NeuronType.OUTPUT]),
+                                       if n.type == NeuronType.OUTPUT]),
                 'hidden_neurons': len([n for n in self.network.neurons.values()
-                                     if n.type == NeuronType.HIDDEN])
+                                       if n.type == NeuronType.HIDDEN])
             },
             'current_state': {
                 'pickup_bag_size': len(self.pickup_bag),

@@ -1,20 +1,16 @@
 import numpy as np
-import matplotlib
-matplotlib.use('Agg')  # Use a non-interactive backend for faster rendering
-import matplotlib.pyplot as plt
-from typing import List, Dict, Set, Tuple, Optional
+from typing import List, Dict, Set, Tuple, Optional, Deque
 from dataclasses import dataclass
 from collections import deque
 from enum import Enum
 from scipy.spatial import KDTree
 from threading import Lock, RLock
 import concurrent.futures
+import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 from matplotlib.colors import Normalize
 from mpl_toolkits.mplot3d.art3d import Line3DCollection
-import imageio
-import os
-import shutil
-import atexit
+
 
 # Neuron type enumeration
 class NeuronType(Enum):
@@ -22,39 +18,42 @@ class NeuronType(Enum):
     HIDDEN = "hidden"
     OUTPUT = "output"
 
-# 3D position class with integer coordinates
-@dataclass(frozen=True)
+
+# 3D position class
+@dataclass
 class Position:
-    x: int
-    y: int
-    z: int
+    x: float
+    y: float
+    z: float
 
     def distance_to(self, other: 'Position') -> float:
         return np.sqrt((self.x - other.x) ** 2 +
                        (self.y - other.y) ** 2 +
                        (self.z - other.z) ** 2)
 
+
 @dataclass
 class NetworkParameters:
-    volume_size: float
-    num_input: int
-    num_output: int
-    total_neurons: int
-    max_radius: float
-    min_radius: float
-    input_radius_factor: float
-    interface_radius_factor: float
-    hidden_radius_range: Tuple[float, float]
-    interface_offset: float
-    activation_budget: int
-    time_window_size: int
-    base_radius_shrink_rate: float
-    activation_radius_factor: float
-    activation_threshold: float
+    volume_size: float = 25.0
+    num_input: int = 100
+    num_output: int = 20
+    total_neurons: int = 300
+    max_radius: float = 3.0
+    min_radius: float = 0.1
+    input_radius_factor: float = 0.25
+    interface_radius_factor: float = 1
+    hidden_radius_range: Tuple[float, float] = (0.10, 0.80)
+    interface_offset: float = 1.
+    activation_budget: int = 1000
+    time_window_size: int = 100
+    base_radius_shrink_rate: float = 0.95
+    activation_radius_factor: float = 0.2
+    activation_threshold: float = 0.5
 
     @property
     def num_hidden(self) -> int:
         return self.total_neurons - (self.num_input * 2) - self.num_output
+
 
 class Neuron:
     def __init__(self, id: int, type: NeuronType, position: Position, params: NetworkParameters):
@@ -83,7 +82,8 @@ class Neuron:
             return False
         if target.type == NeuronType.INPUT:
             return False
-        return True  # Distance is already handled by KDTree
+        distance = self.position.distance_to(target.position)
+        return distance <= self.radius
 
     def update_radius(self, current_time: int) -> None:
         if not self.radius_mutable:
@@ -112,60 +112,47 @@ class Neuron:
                 return True
         return False
 
+
 class SpatialNeuralNetwork:
-    def __init__(self, params: NetworkParameters, save_gif: bool = True):
+    def __init__(self, params: NetworkParameters):
         # Network parameters
         self.params = params
 
         # Neuron collections
         self.neurons: Dict[int, Neuron] = {}
-        self.input_neurons: List[Neuron] = []
+        self.input_neurons: Set[Neuron] = set()
         self.hidden_neurons: Set[Neuron] = set()
         self.output_neurons: Set[Neuron] = set()
-        self.interface_neurons: List[Neuron] = []
-        self.input_to_interface_map: Dict[int, int] = {}  # Mapping from input neuron ID to interface neuron ID
+        self.interface_neurons: Set[Neuron] = set()
 
         # Timing and activation tracking
         self.time_step = 0
         self.window_start_time = 0
         self.window_activations = 0
-        self.window_history: deque = deque(maxlen=100)
-        self.activation_times: deque = deque()
+        self.window_history: Deque[dict] = deque(maxlen=100)
+        self.activation_times: Deque[int] = deque()
 
         # Thread safety controls
         self.neuron_lock = RLock()  # Reentrant lock for neuron operations
+        self.connection_lock = Lock()  # Lock for connection updates
         self.activation_lock = Lock()  # Lock for activation budget
         self.collection_lock = Lock()  # Lock for modifying neuron collections
         self.window_lock = Lock()  # Lock for window operations
 
-        # GIF saving controls
-        self.save_gif = save_gif  # Flag to control plotting and GIF creation
-        if self.save_gif:
-            self.gif_directory = "network_frames"
-            self.cleanup_frames()  # Clean up frames at the start
-            self.frame_count = 0
-            # Initialize GIF writer
-            gif_path = os.path.join(self.gif_directory, "network_evolution.gif")
-            self.gif_writer = imageio.get_writer(gif_path, mode='I', duration=0.5)
-            atexit.register(self.save_gif_final)  # Ensure GIF writer is closed on exit
-
-        # Initialize occupied_positions set
-        self._occupied_positions: Set[Tuple[int, int, int]] = set()
-
-    def cleanup_frames(self):
-        """Remove old frames to start fresh for a new run."""
-        shutil.rmtree(self.gif_directory, ignore_errors=True)
-        os.makedirs(self.gif_directory, exist_ok=True)
+        # Thread pool for parallel operations
+        self.pool = concurrent.futures.ThreadPoolExecutor(
+            max_workers=min(50, (params.total_neurons // 50) + 1)
+        )
 
     def add_neuron(self, neuron: Neuron):
         with self.collection_lock:
             self.neurons[neuron.id] = neuron
             if neuron.type == NeuronType.INPUT:
-                self.input_neurons.append(neuron)
+                self.input_neurons.add(neuron)
             elif neuron.type == NeuronType.HIDDEN:
                 self.hidden_neurons.add(neuron)
                 if not neuron.radius_mutable:
-                    self.interface_neurons.append(neuron)
+                    self.interface_neurons.add(neuron)
             else:
                 self.output_neurons.add(neuron)
 
@@ -176,7 +163,7 @@ class SpatialNeuralNetwork:
                 'neuron_positions': {
                     neuron.id: {
                         'position': (neuron.position.x, neuron.position.y, neuron.position.z),
-                        'type': neuron.type.value,
+                        'type': neuron.type,
                         'radius': neuron.radius,
                         'activation': neuron.activation
                     }
@@ -185,137 +172,124 @@ class SpatialNeuralNetwork:
             }
 
     def update_neuron_positions(self, new_positions: dict) -> None:
-        changed_neurons = []
         with self.neuron_lock:
             for neuron_id, new_pos in new_positions.items():
                 if neuron_id in self.neurons:
-                    # Ensure positions are integers
-                    new_x = int(round(new_pos[0]))
-                    new_y = int(round(new_pos[1]))
-                    new_z = int(round(new_pos[2]))
-                    # Enforce volume bounds
-                    new_x = max(0, min(new_x, int(self.params.volume_size) - 1))
-                    new_y = max(0, min(new_y, int(self.params.volume_size) - 1))
-                    new_z = max(0, min(new_z, int(self.params.volume_size) - 1))
-                    new_position = Position(x=new_x, y=new_y, z=new_z)
-                    # Check if the new position is already occupied
-                    if not self.is_position_occupied(new_position):
-                        self.update_position_occupied(self.neurons[neuron_id].position, False)
-                        self.neurons[neuron_id].position = new_position
-                        self.update_position_occupied(new_position, True)
-                        changed_neurons.append(self.neurons[neuron_id])
-        self.update_connections(changed_neurons)
-        # After updating positions, save the network state if GIF saving is enabled
-        if self.save_gif:
-            self.plot_and_save_network()
+                    self.neurons[neuron_id].position = Position(
+                        x=new_pos[0],
+                        y=new_pos[1],
+                        z=new_pos[2]
+                    )
+        self.update_connections()
 
-    def get_hidden_neuron_positions(self) -> Dict[int, Tuple[int, int, int]]:
+    def get_hidden_neuron_positions(self) -> Dict[int, Tuple[float, float, float]]:
         with self.neuron_lock:
             return {neuron.id: (neuron.position.x, neuron.position.y, neuron.position.z)
                     for neuron in self.hidden_neurons}
 
-    def update_hidden_neuron_positions(self, new_positions: Dict[int, Tuple[int, int, int]]) -> None:
-        self.update_neuron_positions(new_positions)
-
-    def update_connections(self, neurons_to_update=None):
+    def update_hidden_neuron_positions(self, new_positions: Dict[int, Tuple[float, float, float]]) -> None:
         with self.neuron_lock:
-            neuron_list = list(self.neurons.values())
-            if not neuron_list:
+            for neuron_id, pos in new_positions.items():
+                if neuron_id in self.neurons and self.neurons[neuron_id].type == NeuronType.HIDDEN:
+                    self.neurons[neuron_id].position = Position(
+                        x=pos[0],
+                        y=pos[1],
+                        z=pos[2]
+                    )
+        self.update_connections()
+
+    def update_connections(self):
+        with self.connection_lock:
+            with self.neuron_lock:
+                positions = np.array([[n.position.x, n.position.y, n.position.z]
+                                      for n in self.neurons.values()])
+                neuron_list = list(self.neurons.values())
+
+            if len(positions) == 0:
                 return
-            positions = np.array([[n.position.x, n.position.y, n.position.z] for n in neuron_list])
-            neuron_id_to_index = {neuron.id: idx for idx, neuron in enumerate(neuron_list)}
 
-        tree = KDTree(positions)
+            tree = KDTree(positions)
 
-        if neurons_to_update is None:
-            neurons_to_update = self.neurons.values()
-        else:
-            neurons_to_update = list(neurons_to_update)
+            def update_neuron_connections(neuron_idx):
+                neuron = neuron_list[neuron_idx]
+                if neuron.type == NeuronType.OUTPUT:
+                    return
 
-        def update_neuron_connections(neuron):
-            if neuron.type in {NeuronType.INPUT, NeuronType.OUTPUT}:
-                return  # Skip input and output neurons
+                indices = tree.query_ball_point(positions[neuron_idx], r=neuron.radius)
+                new_connections = set()
 
-            neuron_idx = neuron_id_to_index[neuron.id]
-            indices = tree.query_ball_point(positions[neuron_idx], r=neuron.radius)
-            new_connections = set()
+                for idx in indices:
+                    if idx != neuron_idx:
+                        target = neuron_list[idx]
+                        if neuron.can_connect_to(target):
+                            new_connections.add(target)
 
-            for idx in indices:
-                if idx == neuron_idx:
-                    continue  # Skip self
-                target = neuron_list[idx]
-                if target.type == NeuronType.INPUT:
-                    continue  # Skip input neurons
-                if neuron.can_connect_to(target):
-                    new_connections.add(target)
+                with self.neuron_lock:
+                    neuron.connections = new_connections
 
-            neuron.connections = new_connections  # No lock needed here
-
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            executor.map(update_neuron_connections, neurons_to_update)
+            futures = [
+                self.pool.submit(update_neuron_connections, i)
+                for i in range(len(neuron_list))
+            ]
+            concurrent.futures.wait(futures)
 
     def run_cycle(self, inputs: Optional[List[float]] = None) -> List[float]:
         with self.activation_lock:
             self.time_step += 1
 
         if inputs:
-            # Activate input neurons
-            input_pairs = zip(self.input_neurons, [np.clip(x, 0.0, 1.0) for x in inputs])
-
             def process_input(input_pair):
                 input_neuron, input_value = input_pair
-                return input_neuron.try_activate(input_value, self)
+                with self.neuron_lock:
+                    return input_neuron.try_activate(input_value, self)
 
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                executor.map(process_input, input_pairs)
-
-            # Activate interface neurons based on their connected input neuron
-            def process_interface(interface_neuron):
-                input_neuron_id = self.input_to_interface_map.get(interface_neuron.id)
-                if input_neuron_id is not None:
-                    input_neuron = self.neurons.get(input_neuron_id)
-                    if input_neuron:
-                        input_activation = input_neuron.activation
-                        return interface_neuron.try_activate(input_activation, self)
-                return False
-
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                executor.map(process_interface, self.interface_neurons)
+            input_pairs = list(zip(self.input_neurons,
+                                   [np.clip(x, 0.0, 1.0) for x in inputs]))
+            futures = [
+                self.pool.submit(process_input, pair)
+                for pair in input_pairs
+            ]
+            concurrent.futures.wait(futures)
 
         def process_hidden_neuron(neuron):
-            weighted_inputs = []
-            for n in self.neurons.values():
-                if neuron in n.connections:
-                    weight = n.calculate_weight(neuron)
-                    contribution = n.activation * weight
-                    weighted_inputs.append(contribution)
+            with self.neuron_lock:
+                weighted_inputs = []
+                for n in self.neurons.values():
+                    if neuron in n.connections:
+                        weight = n.calculate_weight(neuron)
+                        contribution = n.activation * weight
+                        weighted_inputs.append(contribution)
 
-            if weighted_inputs:
-                total_input = np.clip(np.sum(weighted_inputs), 0.0, 1.0)
-                if len(weighted_inputs) > 1:
-                    total_input /= len(weighted_inputs)
-            else:
-                total_input = 0.0
+                if weighted_inputs:
+                    total_input = np.clip(np.sum(weighted_inputs), 0.0, 1.0)
+                    if len(weighted_inputs) > 1:
+                        total_input /= len(weighted_inputs)
+                else:
+                    total_input = 0.0
 
-            return neuron.try_activate(total_input, self)
+                return neuron.try_activate(total_input, self)
 
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            executor.map(process_hidden_neuron, self.hidden_neurons)
+        futures = [
+            self.pool.submit(process_hidden_neuron, neuron)
+            for neuron in self.hidden_neurons
+        ]
+        concurrent.futures.wait(futures)
 
-        outputs = [neuron.activation for neuron in self.output_neurons]
+        with self.neuron_lock:
+            outputs = [neuron.activation for neuron in self.output_neurons]
 
         if self.update_window():
             def update_neuron_radius(neuron):
-                neuron.update_radius(self.time_step)
+                with self.neuron_lock:
+                    neuron.update_radius(self.time_step)
 
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                executor.map(update_neuron_radius, self.neurons.values())
+            futures = [
+                self.pool.submit(update_neuron_radius, neuron)
+                for neuron in self.neurons.values()
+            ]
+            concurrent.futures.wait(futures)
 
             self.update_connections()
-
-        # After each cycle, save the network state if GIF saving is enabled
-        if self.save_gif:
-            self.plot_and_save_network()
 
         return outputs
 
@@ -362,7 +336,7 @@ class SpatialNeuralNetwork:
                 if self.window_activations >= self.params.activation_budget:
                     break
 
-            cycle_inputs = input_sequence[i] if input_sequence and i < len(input_sequence) else None
+            cycle_inputs = input_sequence[i] if input_sequence else None
             outputs = self.run_cycle(cycle_inputs)
             window_outputs.append(outputs)
             completed_cycles = i + 1
@@ -384,149 +358,141 @@ class SpatialNeuralNetwork:
 
     def compute_unreachable_neurons(self) -> int:
         """
-        Computes the number of neurons that cannot be reached from the input neurons.
+        Computes unreachable neurons using component counting.
+        Formula: ((N-C)/(N-1)) maps to connectivity
+        Returns number of unreachable neurons.
         """
         with self.neuron_lock:
-            reachable_neurons = set()
+            N = len(self.neurons)
+            if N == 0:
+                return 0
 
-            # Initialize queue with input neurons
-            queue = deque(self.input_neurons)
-            for input_neuron in self.input_neurons:
-                reachable_neurons.add(input_neuron.id)
+            # Initialize Union-Find (using neuron IDs)
+            parent = {neuron.id: neuron.id for neuron in self.neurons.values()}
 
-            # Track neurons we've already processed to avoid cycles
-            processed = set()
+            # Find with path compression
+            def find(x):
+                if parent[x] != x:
+                    parent[x] = find(parent[x])
+                return parent[x]
 
-            while queue:
-                current_neuron = queue.popleft()
-                if current_neuron.id in processed:
-                    continue
-
-                processed.add(current_neuron.id)
-
-                # Traverse outgoing connections from the current neuron
-                for target in current_neuron.connections:
-                    if target.id not in reachable_neurons:
-                        reachable_neurons.add(target.id)
-                        queue.append(target)
-
-            # Calculate unreachable neurons
-            total_neurons = len(self.neurons)
-            unreachable = total_neurons - len(reachable_neurons)
-
-        # Plot the network and save the frame after computing connectivity
-        if self.save_gif:
-            self.plot_and_save_network()
-
-        return unreachable
-
-    def plot_and_save_network(self):
-        """Plot the network and save the plot as an image for GIF creation."""
-        try:
-            fig = plt.figure(figsize=(8, 6), dpi=80)
-            ax = fig.add_subplot(111, projection='3d')
-            color_map = {
-                NeuronType.INPUT: 'red',
-                NeuronType.HIDDEN: 'blue',
-                NeuronType.OUTPUT: 'green'
-            }
-            # Prepare data for plotting
-            neuron_positions = np.array([[neuron.position.x, neuron.position.y, neuron.position.z]
-                                         for neuron in self.neurons.values()])
-            neuron_colors = ['cyan' if neuron in self.interface_neurons else color_map[neuron.type]
-                             for neuron in self.neurons.values()]
-
-            # Plot neurons
-            ax.scatter(neuron_positions[:, 0], neuron_positions[:, 1], neuron_positions[:, 2],
-                       c=neuron_colors, s=20, alpha=0.6)
-
-            # Prepare connections
-            line_segments = []
-            colors = []
+            # Union neurons based on connections
             for neuron in self.neurons.values():
+                neuron_id = neuron.id
                 for target in neuron.connections:
-                    xs = [neuron.position.x, target.position.x]
-                    ys = [neuron.position.y, target.position.y]
-                    zs = [neuron.position.z, target.position.z]
-                    line_segments.append(list(zip(xs, ys, zs)))
-                    weight = neuron.calculate_weight(target)
-                    colors.append(weight)
+                    # Connect both ways
+                    pid = find(neuron_id)
+                    tid = find(target.id)
+                    if pid != tid:
+                        parent[tid] = pid
 
-            if line_segments:
-                norm = Normalize(vmin=0, vmax=1)  # Normalize weights between 0 and 1
-                cmap = plt.get_cmap('viridis')
-                lc = Line3DCollection(line_segments, cmap=cmap, norm=norm, linewidths=0.5, alpha=0.5)
-                lc.set_array(np.array(colors))
-                ax.add_collection(lc)
+            # Count unique components
+            C = len(set(find(x) for x in parent))
 
-            # Remove axes for cleaner look
-            ax.set_xticks([])
-            ax.set_yticks([])
-            ax.set_zticks([])
-            ax.set_xlabel('')
-            ax.set_ylabel('')
-            ax.set_zlabel('')
-            ax.grid(False)
-            ax.set_title(f'3D Spatial Neural Network at Step {self.time_step}', fontsize=10)
+            # Directly calculate unreachable neurons from component count
+            # When C = 1 (fully connected), unreachable = 0
+            # When C = N (fully disconnected), unreachable = N
+            return N - int((N - C) * N / (N - 1))
 
-            # Save the figure
-            frame_filename = os.path.join(self.gif_directory, f"frame_{self.frame_count:04d}.png")
-            plt.savefig(frame_filename, bbox_inches='tight', pad_inches=0)
-            plt.close(fig)
 
-            # Append to GIF
-            if self.save_gif:
-                if os.path.exists(frame_filename):
-                    frame = imageio.imread(frame_filename)
-                    self.gif_writer.append_data(frame)
-                    self.frame_count += 1
-        except Exception:
-            pass  # Silently ignore any plotting errors to maintain performance
+def plot_network_with_weights(network: SpatialNeuralNetwork):
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import Normalize
+    from mpl_toolkits.mplot3d.art3d import Line3DCollection
+    from matplotlib.lines import Line2D
 
-    def save_gif_final(self):
-        """Close the GIF writer."""
-        try:
-            if self.save_gif:
-                self.gif_writer.close()
-        except Exception:
-            pass  # Silently ignore any closing errors
+    fig = plt.figure(figsize=(12, 8))
+    ax = fig.add_subplot(111, projection='3d')
+    color_map = {
+        NeuronType.INPUT: 'red',
+        NeuronType.HIDDEN: 'blue',
+        NeuronType.OUTPUT: 'green'
+    }
+    # Get all weights for normalization
+    weights = [neuron.calculate_weight(target)
+               for neuron in network.neurons.values()
+               for target in neuron.connections]
+    if not weights:
+        weights = [0.0]  # Avoid errors if weights list is empty
+    norm = Normalize(vmin=min(weights), vmax=max(weights))
+    cmap = plt.get_cmap('viridis')
+    # Create lists to store line segments and their colors
+    line_segments = []
+    colors = []
+    # Plot neurons
+    for neuron in network.neurons.values():
+        # Plot neuron
+        color = 'cyan' if neuron in network.interface_neurons else color_map[neuron.type]
+        ax.scatter(neuron.position.x, neuron.position.y, neuron.position.z,
+                   color=color, s=50)
+        # Prepare connections for Line3DCollection
+        for target in neuron.connections:
+            xs = [neuron.position.x, target.position.x]
+            ys = [neuron.position.y, target.position.y]
+            zs = [neuron.position.z, target.position.z]
+            line_segments.append(list(zip(xs, ys, zs)))
+            weight = neuron.calculate_weight(target)
+            colors.append(weight)
+    if line_segments:
+        # Create a Line3DCollection with the line segments
+        lc = Line3DCollection(line_segments, cmap=cmap, norm=norm)
+        lc.set_array(np.array(colors))
+        ax.add_collection(lc)
+        # Add colorbar for weights
+        cbar = fig.colorbar(lc, ax=ax, label='Connection Weight')
+    # Add legend
+    legend_elements = [
+        Line2D([0], [0], marker='o', color='w', markerfacecolor='red',
+               label='Input Neuron', markersize=10),
+        Line2D([0], [0], marker='o', color='w', markerfacecolor='blue',
+               label='Hidden Neuron', markersize=10),
+        Line2D([0], [0], marker='o', color='w', markerfacecolor='cyan',
+               label='Interface Neuron', markersize=10),
+        Line2D([0], [0], marker='o', color='w', markerfacecolor='green',
+               label='Output Neuron', markersize=10)
+    ]
+    ax.legend(handles=legend_elements)
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+    ax.set_title('3D Spatial Neural Network with Connection Weights Heatmap')
 
-    def is_position_occupied(self, position: Position) -> bool:
-        position_key = (position.x, position.y, position.z)
-        return position_key in self._occupied_positions
 
-    def update_position_occupied(self, position: Position, occupied: bool) -> None:
-        position_key = (position.x, position.y, position.z)
-        if occupied:
-            self._occupied_positions.add(position_key)
-        else:
-            self._occupied_positions.discard(position_key)
-
-def create_network(params: NetworkParameters, save_gif: bool = False) -> SpatialNeuralNetwork:
-    network = SpatialNeuralNetwork(params, save_gif=save_gif)
+def create_network(params: NetworkParameters) -> SpatialNeuralNetwork:
+    network = SpatialNeuralNetwork(params)
     id_counter = 0
 
     input_radius = params.max_radius * params.input_radius_factor
     interface_radius = params.max_radius * params.interface_radius_factor
+
+    # Set to keep track of occupied positions
+    occupied_positions = set()
+
+    def is_position_occupied(position: Position) -> bool:
+        position_key = (int(position.x), int(position.y), int(position.z))
+        return position_key in occupied_positions
+
+    def add_position(position: Position):
+        position_key = (int(position.x), int(position.y), int(position.z))
+        occupied_positions.add(position_key)
 
     # Create input and interface neurons
     for _ in range(params.num_input):
         # Generate unique position for input neuron using integer positions
         while True:
             input_pos = Position(
-                x=np.random.randint(0, int(params.volume_size)),
-                y=np.random.randint(0, int(params.volume_size)),
-                z=np.random.randint(0, int(params.volume_size))
+                x=float(np.random.randint(0, int(params.volume_size))),
+                y=float(np.random.randint(0, int(params.volume_size))),
+                z=float(np.random.randint(0, int(params.volume_size)))
             )
-            if not network.is_position_occupied(input_pos):
-                network.update_position_occupied(input_pos, True)
+            if not is_position_occupied(input_pos):
+                add_position(input_pos)
                 break
 
         input_neuron = Neuron(id_counter, NeuronType.INPUT, input_pos, params)
         input_neuron.radius = input_radius
         input_neuron.radius_mutable = False
         network.add_neuron(input_neuron)
-        input_neuron_id = id_counter
         id_counter += 1
 
         # Generate unique position for interface neuron adjacent to input
@@ -535,52 +501,36 @@ def create_network(params: NetworkParameters, save_gif: bool = False) -> Spatial
             dx = np.random.randint(-1, 2)
             dy = np.random.randint(-1, 2)
             dz = np.random.randint(-1, 2)
-            new_x = (input_pos.x + dx) % int(params.volume_size)
-            new_y = (input_pos.y + dy) % int(params.volume_size)
-            new_z = (input_pos.z + dz) % int(params.volume_size)
             interface_pos = Position(
-                x=new_x,
-                y=new_y,
-                z=new_z
+                x=float((int(input_pos.x) + dx) % int(params.volume_size)),
+                y=float((int(input_pos.y) + dy) % int(params.volume_size)),
+                z=float((int(input_pos.z) + dz) % int(params.volume_size))
             )
-            if not network.is_position_occupied(interface_pos):
-                network.update_position_occupied(interface_pos, True)
+            if not is_position_occupied(interface_pos):
+                add_position(interface_pos)
                 break
 
         interface_neuron = Neuron(id_counter, NeuronType.HIDDEN, interface_pos, params)
         interface_neuron.radius = interface_radius
         interface_neuron.radius_mutable = False
         network.add_neuron(interface_neuron)
-        interface_neuron_id = id_counter
         id_counter += 1
-
-        # Establish direct connection between input neuron and its interface neuron
-        input_neuron.connections.add(interface_neuron)
-
-        # Map input neuron ID to interface neuron ID for activation
-        network.input_to_interface_map[input_neuron_id] = interface_neuron_id
-
-        # Map interface neuron ID to input neuron ID for activation
-        if not hasattr(network, 'interface_to_input_map'):
-            network.interface_to_input_map = {}
-        network.interface_to_input_map[interface_neuron_id] = input_neuron_id
 
     # Create hidden neurons
     for _ in range(params.num_hidden):
         while True:
             pos = Position(
-                x=np.random.randint(0, int(params.volume_size)),
-                y=np.random.randint(0, int(params.volume_size)),
-                z=np.random.randint(0, int(params.volume_size))
+                x=float(np.random.randint(0, int(params.volume_size))),
+                y=float(np.random.randint(0, int(params.volume_size))),
+                z=float(np.random.randint(0, int(params.volume_size)))
             )
-            if not network.is_position_occupied(pos):
-                network.update_position_occupied(pos, True)
+            if not is_position_occupied(pos):
+                add_position(pos)
                 break
 
         neuron = Neuron(id_counter, NeuronType.HIDDEN, pos, params)
         min_hidden_radius = params.hidden_radius_range[0] * params.max_radius
         max_hidden_radius = params.hidden_radius_range[1] * params.max_radius
-        # Using a uniform distribution for radius
         neuron.radius = np.random.uniform(min_hidden_radius, max_hidden_radius)
         network.add_neuron(neuron)
         id_counter += 1
@@ -589,12 +539,12 @@ def create_network(params: NetworkParameters, save_gif: bool = False) -> Spatial
     for _ in range(params.num_output):
         while True:
             pos = Position(
-                x=np.random.randint(0, int(params.volume_size)),
-                y=np.random.randint(0, int(params.volume_size)),
-                z=np.random.randint(0, int(params.volume_size))
+                x=float(np.random.randint(0, int(params.volume_size))),
+                y=float(np.random.randint(0, int(params.volume_size))),
+                z=float(np.random.randint(0, int(params.volume_size)))
             )
-            if not network.is_position_occupied(pos):
-                network.update_position_occupied(pos, True)
+            if not is_position_occupied(pos):
+                add_position(pos)
                 break
 
         output_neuron = Neuron(id_counter, NeuronType.OUTPUT, pos, params)
@@ -604,9 +554,53 @@ def create_network(params: NetworkParameters, save_gif: bool = False) -> Spatial
         id_counter += 1
 
     network.update_connections()
-    # After initial creation, save the network state if GIF saving is enabled
-    if network.save_gif:
-        network.plot_and_save_network()
     return network
 
-# End of SP_NN module
+
+if __name__ == "__main__":
+    # Define consistent network parameters
+    network_params = {
+        'volume_size': 8.0,
+        'num_input': 100,  # Align with fitness function
+        'num_output': 4,  # Align with fitness function
+        'total_neurons': 500,  # Align with fitness function
+        'activation_budget': 1000,  # Ensure all necessary parameters are included
+        'time_window_size': 100
+    }
+
+    # Create network with consistent parameters
+    params = NetworkParameters(
+        volume_size=network_params['volume_size'],
+        num_input=network_params['num_input'],
+        num_output=network_params['num_output'],
+        total_neurons=network_params['total_neurons'],
+        activation_budget=network_params['activation_budget'],
+        time_window_size=network_params['time_window_size']
+    )
+    network = create_network(params)
+
+    # Compute number of unreachable neurons
+    unreachable_neurons = network.compute_unreachable_neurons()
+
+    # Get positions of hidden neurons
+    hidden_positions = network.get_hidden_neuron_positions()
+
+    # Example: Modify positions of hidden neurons (e.g., move them randomly)
+    modified_positions = {}
+    for neuron_id, pos in hidden_positions.items():
+        dx = np.random.uniform(-1.0, 1.0)
+        dy = np.random.uniform(-1.0, 1.0)
+        dz = np.random.uniform(-1.0, 1.0)
+        new_pos = (pos[0] + dx, pos[1] + dy, pos[2] + dz)
+        modified_positions[neuron_id] = new_pos
+
+    # Update hidden neuron positions in the network
+    network.update_hidden_neuron_positions(modified_positions)
+
+    # Recompute number of unreachable neurons after modification
+    unreachable_neurons_after = network.compute_unreachable_neurons()
+
+    # Plot the network
+    plot_network_with_weights(network)
+    plt.tight_layout()
+    plt.show()
