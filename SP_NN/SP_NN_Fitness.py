@@ -1,13 +1,15 @@
 from typing import Dict, List, Optional
 from dataclasses import dataclass
 import numpy as np
-from SP_NN import Position, NetworkParameters, create_network, NeuronType
+from SP_NN import Position, NetworkParameters, create_network, NeuronType, plot_network_with_weights
 import sys
 import tkinter as tk
 from tkinter import ttk
 import threading
 import queue
 import time
+import os
+import matplotlib.pyplot as plt
 
 
 class NetworkMonitorWindow:
@@ -115,30 +117,23 @@ class NetworkEvolutionFitness:
             self,
             network_params: Dict[str, any],
             update_best_func=None,
-            max_path_length: int = 300,
+            max_path_length: int = 40,
             path_step_reward: float = 1.00,
-            pickup_reward: float = 3.,               # Reward for picking up a neuron
-            successful_drop_reward: float = 10.,      # Reward for a successful drop
-            failed_drop_penalty: float = -0.,        # Penalty for a failed drop
-            empty_bag_reward: float = 10.00,            # Reward for emptying the pickup bag
-            step_penalty: float = -11.00,               # Penalty for steps beyond max_path_length
+            pickup_reward: float = 1.,
+            successful_drop_reward: float = 3.,
+            failed_drop_penalty: float = -0.,
+            empty_bag_reward: float = 10.00,
+            step_penalty: float = -10.00,
             debug: bool = False
     ):
         """
         Initialize Phase 1 fitness evaluation focusing on network connectivity structure.
-
-        Parameters:
-            network_params (dict): Dictionary containing network initialization parameters.
-            update_best_func (callable, optional): Function to update the best individuals.
-            max_path_length (int): Maximum allowed path length before applying penalties.
-            path_step_reward (float): Reward for each successful path step.
-            pickup_reward (float): Reward for each neuron picked up.
-            successful_drop_reward (float): Reward for a successful drop action.
-            failed_drop_penalty (float): Penalty for a failed drop action.
-            empty_bag_reward (float): Reward for having zero neurons in the pickup bag.
-            step_penalty (float): Penalty for movements beyond the maximum path length.
-            debug (bool): Enable debug output printing.
         """
+        # Create plots directory if it doesn't exist
+        self.plots_dir = "network_plots"
+        if not os.path.exists(self.plots_dir):
+            os.makedirs(self.plots_dir)
+
         # Centralized Reward, Penalty, and Parameter Definitions
         self.max_path_length = max_path_length
         self.path_step_reward = path_step_reward
@@ -158,7 +153,7 @@ class NetworkEvolutionFitness:
         # Create network parameters using the provided network_params dictionary
         self.network_params = NetworkParameters(
             volume_size=network_params.get('volume_size', 10.0),
-            num_input=network_params.get('num_input', 100),
+            num_input=network_params.get('num_input', 5),
             num_output=network_params.get('num_output', 4),
             total_neurons=network_params.get('total_neurons', 800),
             max_radius=network_params.get('max_radius', 3.0),
@@ -177,6 +172,9 @@ class NetworkEvolutionFitness:
         # Initialize the spatial neural network with the defined parameters
         self.network = create_network(self.network_params)
 
+        # Plot and save initial network state
+        self.save_network_plot("initial")
+
         # Initialize persistent path state
         self.pickup_bag = []
         self.current_pos = Position(0.0, 0.0, 0.0)  # Initial position at origin
@@ -193,6 +191,22 @@ class NetworkEvolutionFitness:
 
         # Initialize last connectivity score
         self._last_connectivity = 0
+
+    def save_network_plot(self, stage: str):
+        """Save a plot of the network at the specified stage"""
+        plt.figure(figsize=(12, 8))
+        plot_network_with_weights(self.network)
+        plt.tight_layout()
+
+        # Generate filename with timestamp
+        timestamp = time.strftime("%Y%m%d-%H%M%S")
+        filename = f"{self.plots_dir}/network_{stage}_{timestamp}.png"
+
+        plt.savefig(filename)
+        plt.close()
+
+        if self.debug:
+            print(f"Saved network plot: {filename}")
 
     def calculate_connectivity_score(self) -> float:
         """Calculate network connectivity as a percentage (0-100)"""
@@ -275,12 +289,7 @@ class NetworkEvolutionFitness:
                 else:
                     # Failed drop
                     failed_drops += 1
-                    if step_limit_passed:
-                        # Penalty for failed drop beyond limit
-                        path_score += self.failed_drop_penalty
-                    else:
-                        # Optional: You can decide whether to penalize failed drops within limit
-                        path_score += self.failed_drop_penalty  # Applying penalty regardless of step limit
+                    path_score += self.failed_drop_penalty
 
             else:
                 # Movement command
@@ -347,13 +356,7 @@ class NetworkEvolutionFitness:
 
     def compute(self, encoded_individual, ga_instance) -> float:
         """
-        Phase 1 fitness computation. Final fitness is:
-        fitness = (connectivity_score + path_score) ** 3
-
-        connectivity_score: 0-100 (percentage of reachable neurons)
-        path_score: raw score based on steps, drops, and penalties
-
-        Exits Phase 1 when 100% connectivity is achieved.
+        Phase 1 fitness computation with network visualization at 100% connectivity.
         """
         # Decode and execute path
         path = ga_instance.decode_organism(encoded_individual)
@@ -373,10 +376,13 @@ class NetworkEvolutionFitness:
                 print(f"Neurons Moved: {movement_results['neurons_moved']}")
                 print(f"Path Length: {movement_results['total_steps']}")
                 print(f"Failed Drops: {movement_results['failed_drops']}")
-            sys.exit(0)  # Clean exit after achieving goal
 
-        # Final fitness is the connectivity percentage plus raw path score
-        fitness =   fitness = abs(path_score) ** (connectivity_score * 0.05)
+            # Save final network plot before exiting
+            self.save_network_plot("final")
+            sys.exit(0)
+
+        # Final fitness calculation
+        fitness = abs(path_score) ** (connectivity_score * 0.02)
 
         if self.debug:
             print(f"\nFitness Calculation Details:")

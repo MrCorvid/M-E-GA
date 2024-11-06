@@ -12,13 +12,13 @@ class ExperimentRunner:
         # Input/Output neuron counts are managed by fitness class based on simulation requirements
         self.network_params = {
             # Core network structure
-            'volume_size': 15.0,
-            'total_neurons': 400,
+            'volume_size': 10.0,
+            'total_neurons': 70,
 
             # Neuron radius parameters
-            'max_radius': 3.0,
-            'min_radius': 1.0,
-            'hidden_radius_range': (0.10, 0.50),
+            'max_radius': 2.0,
+            'min_radius': 1.50,
+            'hidden_radius_range': (1.0, 0.50),
             'base_radius_shrink_rate': 0.95,
             'input_radius_factor': .60,
             'interface_radius_factor': .60,
@@ -38,11 +38,11 @@ class ExperimentRunner:
         'open_mutation_prob': 0.05,
         'capture_mutation_prob': 0.03,
         'delimiter_insert_prob': 0.04,
-        'delimit_delete_prob': 0.03,
+        'delimit_delete_prob': 0.05,
         'crossover_prob': 0.00,
         'elitism_ratio': 0.00,
         'base_gene_prob': 0.30,
-        'capture_gene_prob': 0.01,
+        'capture_gene_prob': 0.03,
         'max_individual_length': 100,
         'population_size': 500,
         'num_parents': 200,
