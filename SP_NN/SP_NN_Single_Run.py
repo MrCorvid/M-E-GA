@@ -13,7 +13,7 @@ class ExperimentRunner:
         self.network_params = {
             # Core network structure
             'volume_size': 10.0,
-            'total_neurons': 70,
+            'total_neurons': 100,
 
             # Neuron radius parameters
             'max_radius': 2.0,
@@ -41,8 +41,8 @@ class ExperimentRunner:
         'delimit_delete_prob': 0.05,
         'crossover_prob': 0.00,
         'elitism_ratio': 0.00,
-        'base_gene_prob': 0.30,
-        'capture_gene_prob': 0.03,
+        'base_gene_prob': 0.25,
+        'capture_gene_prob': 0.04,
         'max_individual_length': 100,
         'population_size': 500,
         'num_parents': 200,

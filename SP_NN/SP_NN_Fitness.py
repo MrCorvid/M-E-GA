@@ -10,11 +10,29 @@ import queue
 import time
 import os
 import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from mpl_toolkits.mplot3d import Axes3D  # Required for 3D plotting
 
 
 class NetworkMonitorWindow:
-    def __init__(self):
+    def __init__(self, volume_size: float = 10.0, fig_size: int = 5):
+        """
+        Initialize the Network Monitor Window.
+
+        Args:
+            volume_size (float): The size of the spatial volume.
+            fig_size (int): The size of the matplotlib figure.
+        """
         self.queue = queue.Queue()
+        self.volume_size = volume_size
+        self.fig_size = fig_size
+        self.neuron_scatter = None
+        self.drop_scatter = None
+        self.path_line = None
+        self.processed_drops = []
+        self.path_steps = []
+        self.lock = threading.Lock()
+
         # Start window in separate thread
         self.thread = threading.Thread(target=self.create_window, daemon=True)
         self.thread.start()
@@ -24,29 +42,52 @@ class NetworkMonitorWindow:
         try:
             self.root = tk.Tk()
             self.root.title("Network Health Monitor")
-            self.root.geometry("300x150")
+            self.root.geometry("800x800")  # Increased size to accommodate 3D plot
             self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
             # Configure main frame
             self.frame = ttk.Frame(self.root, padding="10")
-            self.frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+            self.frame.pack(expand=True, fill=tk.BOTH)
 
             # Connectivity label
             self.connectivity_label = ttk.Label(self.frame, text="Network Connectivity: 0%")
-            self.connectivity_label.grid(row=0, column=0, pady=10)
+            self.connectivity_label.pack(pady=5)
 
             # Progress bar
             self.progress = ttk.Progressbar(
                 self.frame,
-                length=200,
+                length=400,
                 mode='determinate',
                 maximum=100
             )
-            self.progress.grid(row=1, column=0, pady=10)
+            self.progress.pack(pady=5)
 
             # Status label
             self.status_label = ttk.Label(self.frame, text="Status: Initializing...")
-            self.status_label.grid(row=2, column=0, pady=10)
+            self.status_label.pack(pady=5)
+
+            # Matplotlib Figure
+            self.fig = plt.Figure(figsize=(6, 6), dpi=100)
+            self.ax = self.fig.add_subplot(111, projection='3d')
+            self.ax.set_xlim(0, self.volume_size)
+            self.ax.set_ylim(0, self.volume_size)
+            self.ax.set_zlim(0, self.volume_size)
+            self.ax.set_xlabel('X')
+            self.ax.set_ylabel('Y')
+            self.ax.set_zlabel('Z')
+            self.ax.set_title('3D Network Visualization')
+
+            # Initialize scatter plots
+            self.neuron_scatter = self.ax.scatter([], [], [], c=[], cmap='viridis', marker='o', s=20, label='Neurons')
+            self.drop_scatter = self.ax.scatter([], [], [], c='red', marker='^', s=50, label='Drops')
+            self.path_line, = self.ax.plot([], [], [], c='blue', linewidth=2, label='Path')
+
+            self.ax.legend(loc='upper right')
+
+            # Embed the matplotlib figure in Tkinter
+            self.canvas = FigureCanvasTkAgg(self.fig, master=self.frame)
+            self.canvas.draw()
+            self.canvas.get_tk_widget().pack(expand=True, fill=tk.BOTH)
 
             # Set up periodic queue check
             self.check_queue()
@@ -70,8 +111,8 @@ class NetworkMonitorWindow:
         try:
             while True:
                 try:
-                    value = self.queue.get_nowait()
-                    self._update_display(value)
+                    message = self.queue.get_nowait()
+                    self._handle_message(message)
                 except queue.Empty:
                     break
 
@@ -83,15 +124,48 @@ class NetworkMonitorWindow:
         except Exception as e:
             print(f"Error checking queue: {e}")
 
-    def update_connectivity(self, value):
-        """Thread-safe method to update the display"""
+    def update_connectivity(self, value: float):
+        """Thread-safe method to update the connectivity display"""
         try:
-            self.queue.put(value)
+            self.queue.put({'type': 'connectivity', 'value': value})
         except Exception as e:
             print(f"Error updating connectivity: {e}")
 
-    def _update_display(self, value):
-        """Internal method to update GUI elements"""
+    def update_neuron_positions(self, neurons: Dict[str, Position]):
+        """Thread-safe method to update neuron positions"""
+        try:
+            self.queue.put({'type': 'neurons', 'data': neurons})
+        except Exception as e:
+            print(f"Error updating neuron positions: {e}")
+
+    def update_drop_locations(self, drops: List[Position]):
+        """Thread-safe method to update drop locations"""
+        try:
+            self.queue.put({'type': 'drops', 'data': drops})
+        except Exception as e:
+            print(f"Error updating drop locations: {e}")
+
+    def update_path_step(self, position: Position):
+        """Thread-safe method to update the path display"""
+        try:
+            self.queue.put({'type': 'path_step', 'position': position})
+        except Exception as e:
+            print(f"Error updating path step: {e}")
+
+    def _handle_message(self, message: Dict):
+        """Handle different types of messages"""
+        message_type = message.get('type')
+        if message_type == 'connectivity':
+            self._update_connectivity_display(message.get('value'))
+        elif message_type == 'neurons':
+            self._update_neuron_positions_display(message.get('data'))
+        elif message_type == 'drops':
+            self._update_drop_locations_display(message.get('data'))
+        elif message_type == 'path_step':
+            self._update_path_display(message.get('position'))
+
+    def _update_connectivity_display(self, value: float):
+        """Update connectivity GUI elements"""
         try:
             self.connectivity_label.config(text=f"Network Connectivity: {value:.1f}%")
             self.progress['value'] = value
@@ -109,7 +183,58 @@ class NetworkMonitorWindow:
 
             self.status_label.config(text=f"Status: {status}", foreground=color)
         except Exception as e:
-            print(f"Error updating display: {e}")
+            print(f"Error updating connectivity display: {e}")
+
+    def _update_neuron_positions_display(self, neurons: Dict[str, Position]):
+        """Update neuron positions in the 3D plot"""
+        try:
+            xs = []
+            ys = []
+            zs = []
+            colors = []
+            for nid, pos in neurons.items():
+                xs.append(pos.x)
+                ys.append(pos.y)
+                zs.append(pos.z)
+                if pos.type == NeuronType.INPUT:
+                    colors.append('green')
+                elif pos.type == NeuronType.OUTPUT:
+                    colors.append('blue')
+                elif pos.type == NeuronType.HIDDEN:
+                    colors.append('purple')
+                else:
+                    colors.append('gray')  # Default color for unknown types
+
+            self.neuron_scatter._offsets3d = (xs, ys, zs)
+            self.neuron_scatter.set_color(colors)
+            self.canvas.draw()
+        except Exception as e:
+            print(f"Error updating neuron positions display: {e}")
+
+    def _update_drop_locations_display(self, drops: List[Position]):
+        """Update drop locations in the 3D plot"""
+        try:
+            xs = [drop.x for drop in drops]
+            ys = [drop.y for drop in drops]
+            zs = [drop.z for drop in drops]
+
+            # Append new drops
+            self.drop_scatter._offsets3d = (xs, ys, zs)
+            self.canvas.draw()
+        except Exception as e:
+            print(f"Error updating drop locations display: {e}")
+
+    def _update_path_display(self, position: Position):
+        """Update the path visualization on the 3D plot"""
+        try:
+            self.path_steps.append((position.x, position.y, position.z))
+            if len(self.path_steps) > 1:
+                xs, ys, zs = zip(*self.path_steps)
+                self.path_line.set_data(xs, ys)
+                self.path_line.set_3d_properties(zs)
+                self.canvas.draw()
+        except Exception as e:
+            print(f"Error updating path display: {e}")
 
 
 class NetworkEvolutionFitness:
@@ -117,7 +242,7 @@ class NetworkEvolutionFitness:
             self,
             network_params: Dict[str, any],
             update_best_func=None,
-            max_path_length: int = 40,
+            max_path_length: int = 100,
             path_step_reward: float = 1.00,
             pickup_reward: float = 1.,
             successful_drop_reward: float = 3.,
@@ -153,7 +278,7 @@ class NetworkEvolutionFitness:
         # Create network parameters using the provided network_params dictionary
         self.network_params = NetworkParameters(
             volume_size=network_params.get('volume_size', 10.0),
-            num_input=network_params.get('num_input', 5),
+            num_input=network_params.get('num_input', 100),
             num_output=network_params.get('num_output', 4),
             total_neurons=network_params.get('total_neurons', 800),
             max_radius=network_params.get('max_radius', 3.0),
@@ -181,9 +306,11 @@ class NetworkEvolutionFitness:
 
         # Create monitor window first
         try:
-            self.monitor = NetworkMonitorWindow()
+            self.monitor = NetworkMonitorWindow(volume_size=self.network_params.volume_size)
             # Give the window a moment to initialize
-            time.sleep(0.1)
+            time.sleep(0.5)
+            # Initialize path visualization with starting position
+            self.monitor.update_path_step(self.current_pos)
         except Exception as e:
             if self.debug:
                 print(f"Warning: Could not create monitor window: {e}")
@@ -191,6 +318,9 @@ class NetworkEvolutionFitness:
 
         # Initialize last connectivity score
         self._last_connectivity = 0
+
+        # Initialize a set to keep track of processed neurons (picked up and dropped)
+        self.processed_neurons = set()
 
     def save_network_plot(self, stage: str):
         """Save a plot of the network at the specified stage"""
@@ -235,6 +365,11 @@ class NetworkEvolutionFitness:
         # Clear pickup bag at start of each path
         self.pickup_bag = []
 
+        # Reset path in the monitor
+        if self.monitor:
+            self.monitor.path_steps = []
+            self.monitor.update_path_step(self.current_pos)
+
         state = self.network.get_network_state()
         neuron_positions = state['neuron_positions']
         position_updates = {}
@@ -250,6 +385,9 @@ class NetworkEvolutionFitness:
 
         # Track when we pass the step limit
         step_limit_passed = False
+
+        # Collect drop positions for visualization
+        drop_positions = []
 
         for command in path:
             # Check if we're passing the step limit
@@ -270,7 +408,7 @@ class NetworkEvolutionFitness:
                 is_position_empty = not any(
                     tuple(round(x) for x in pos['position']) == current_pos_tuple
                     for nid, pos in neuron_positions.items()
-                    if nid not in self.pickup_bag and nid not in position_updates
+                    if nid not in self.pickup_bag and nid not in position_updates and nid not in self.processed_neurons
                 )
 
                 if is_position_empty:
@@ -279,6 +417,13 @@ class NetworkEvolutionFitness:
                     position_updates[neuron_id] = current_pos_tuple
                     neurons_moved += 1
                     successful_drops += 1
+
+                    # Mark neuron as processed
+                    self.processed_neurons.add(neuron_id)
+
+                    # Record drop position
+                    drop_pos = Position(*current_pos_tuple)
+                    drop_positions.append(drop_pos)
 
                     if not step_limit_passed:
                         # Reward for successful drop within limit
@@ -310,13 +455,14 @@ class NetworkEvolutionFitness:
                             round(self.current_pos.z)
                         )
 
-                        # Only pick up hidden neurons
+                        # Only pick up hidden neurons that have not been processed
                         for nid, data in neuron_positions.items():
                             neuron = self.network.neurons[nid]
                             if (
                                     neuron.type == NeuronType.HIDDEN and
                                     nid not in self.pickup_bag and
-                                    nid not in position_updates
+                                    nid not in position_updates and
+                                    nid not in self.processed_neurons
                             ):
                                 neuron_pos = tuple(round(x) for x in data['position'])
                                 if neuron_pos == current_pos_tuple:
@@ -329,6 +475,14 @@ class NetworkEvolutionFitness:
                         # Penalty for move beyond limit
                         path_score += self.step_penalty
 
+                    # Send the new position to the monitor
+                    if self.monitor:
+                        self.monitor.update_path_step(self.current_pos)
+
+            # Optional: Introduce a small delay for real-time visualization
+            if self.monitor:
+                time.sleep(0.05)  # Adjust as needed
+
         # Apply reward for empty pickup bag at the end
         if not self.pickup_bag:
             path_score += self.empty_bag_reward
@@ -337,6 +491,10 @@ class NetworkEvolutionFitness:
         else:
             if self.debug:
                 print(f"Pickup bag not empty. Remaining neurons: {len(self.pickup_bag)}")
+
+        # Send drop locations to the monitor
+        if self.monitor and drop_positions:
+            self.monitor.update_drop_locations(drop_positions)
 
         if position_updates:
             self.network.update_neuron_positions(position_updates)
@@ -359,7 +517,7 @@ class NetworkEvolutionFitness:
         Phase 1 fitness computation with network visualization at 100% connectivity.
         """
         # Decode and execute path
-        path = ga_instance.decode_organism(encoded_individual)
+        path = ga_instance.decode_organism(encoded_individual) if ga_instance else encoded_individual
         movement_results = self.execute_path(path)
 
         # Get raw path score from execution
@@ -409,9 +567,9 @@ class NetworkEvolutionFitness:
 
         if direction in moves:
             dx, dy, dz = moves[direction]
-            new_x = round(self.current_pos.x + dx) % round(self.network_params.volume_size)
-            new_y = round(self.current_pos.y + dy) % round(self.network_params.volume_size)
-            new_z = round(self.current_pos.z + dz) % round(self.network_params.volume_size)
+            new_x = (self.current_pos.x + dx) % self.network_params.volume_size
+            new_y = (self.current_pos.y + dy) % self.network_params.volume_size
+            new_z = (self.current_pos.z + dz) % self.network_params.volume_size
             return Position(float(new_x), float(new_y), float(new_z))
         return None
 
@@ -424,7 +582,7 @@ class NetworkEvolutionFitness:
             },
             'path': {
                 'max_length': self.max_path_length,
-                'step_reward': self.path_step_reward,
+                'path_step_reward': self.path_step_reward,
                 'pickup_reward': self.pickup_reward,
                 'successful_drop_reward': self.successful_drop_reward,
                 'failed_drop_penalty': self.failed_drop_penalty,

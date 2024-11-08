@@ -37,7 +37,7 @@ class NetworkParameters:
     volume_size: float = 25.0
     num_input: int = 100
     num_output: int = 20
-    total_neurons: int = 300
+    total_neurons: int = 400
     max_radius: float = 3.0
     min_radius: float = 0.1
     input_radius_factor: float = 0.25
