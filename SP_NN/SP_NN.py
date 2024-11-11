@@ -34,15 +34,15 @@ class Position:
 
 @dataclass
 class NetworkParameters:
-    volume_size: float = 25.0
-    num_input: int = 100
+    volume_size: float = 100.0
+    num_input: int = 10
     num_output: int = 20
-    total_neurons: int = 400
+    total_neurons: int = 100
     max_radius: float = 3.0
     min_radius: float = 0.1
     input_radius_factor: float = 0.25
     interface_radius_factor: float = 1
-    hidden_radius_range: Tuple[float, float] = (0.10, 0.80)
+    hidden_radius_range: Tuple[float, float] = (.50, 1.0)
     interface_offset: float = 1.
     activation_budget: int = 1000
     time_window_size: int = 100

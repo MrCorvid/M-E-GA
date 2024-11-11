@@ -1,569 +1,28 @@
-import numpy as np
-from typing import List, Dict, Set, Tuple, Optional, Deque
-from dataclasses import dataclass
-from collections import deque
-from enum import Enum
-from scipy.spatial import KDTree
-from threading import Lock, RLock
-import concurrent.futures
-import matplotlib.pyplot as plt
-from matplotlib.lines import Line2D
-from matplotlib.colors import Normalize
-from mpl_toolkits.mplot3d.art3d import Line3DCollection
+# network_evolution_fitness.py
+
+from typing import List, Dict, Optional, Callable
+from SP_NN import (
+    create_network,
+    SpatialNeuralNetwork,
+    NetworkParameters,
+    Position,
+    NeuronType
+)
+import threading
+import time
 import sys
+import queue
 import tkinter as tk
 from tkinter import ttk
-import threading
-import queue
-import time
-import os
+import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-from mpl_toolkits.mplot3d import Axes3D  # Required for 3D plotting
-
-
-# Neuron type enumeration
-class NeuronType(Enum):
-    INPUT = "input"
-    HIDDEN = "hidden"
-    OUTPUT = "output"
-
-
-# 3D position class
-@dataclass
-class Position:
-    x: float
-    y: float
-    z: float
-
-    def distance_to(self, other: 'Position') -> float:
-        return np.sqrt((self.x - other.x) ** 2 +
-                      (self.y - other.y) ** 2 +
-                      (self.z - other.z) ** 2)
-
-
-@dataclass
-class NetworkParameters:
-    volume_size: float = 25.0
-    num_input: int = 100
-    num_output: int = 20
-    total_neurons: int = 400
-    max_radius: float = 3.0
-    min_radius: float = 0.1
-    input_radius_factor: float = 0.25
-    interface_radius_factor: float = 1
-    hidden_radius_range: Tuple[float, float] = (0.10, 0.80)
-    interface_offset: float = 1.
-    activation_budget: int = 1000
-    time_window_size: int = 100
-    base_radius_shrink_rate: float = 0.95
-    activation_radius_factor: float = 0.2
-    activation_threshold: float = 0.5
-
-    @property
-    def num_hidden(self) -> int:
-        return self.total_neurons - (self.num_input * 2) - self.num_output
-
-
-class Neuron:
-    def __init__(self, id: int, type: NeuronType, position: Position, params: NetworkParameters):
-        self.id = id
-        self.type = type
-        self.position = position
-        self.radius = 0.0
-        self.activation = 0.0
-        self.connections: Set['Neuron'] = set()
-        self.activation_history = deque(maxlen=10)
-        self.activation_threshold = params.activation_threshold
-        self.radius_mutable = True
-        self.min_radius = params.min_radius
-        self.max_radius = params.max_radius
-        self.radius_shrink_rate = params.base_radius_shrink_rate
-        self.activation_radius_factor = params.activation_radius_factor
-        self.last_activation_time = 0
-
-    def calculate_weight(self, target: 'Neuron') -> float:
-        distance = self.position.distance_to(target.position)
-        # Add small epsilon to prevent division by zero
-        return np.clip(1.0 / (1.0 + max(distance, 1e-10)), 0.0, 1.0)
-
-    def can_connect_to(self, target: 'Neuron') -> bool:
-        if self.type == NeuronType.OUTPUT:
-            return False
-        if target.type == NeuronType.INPUT:
-            return False
-        distance = self.position.distance_to(target.position)
-        return distance <= self.radius
-
-    def update_radius(self, current_time: int) -> None:
-        if not self.radius_mutable:
-            return
-
-        recent_activity = (sum(self.activation_history) / len(self.activation_history)
-                           if self.activation_history else 0.0)
-
-        # Clip recent activity to prevent excessive growth
-        recent_activity = np.clip(recent_activity, 0.0, 1.0)
-
-        self.radius *= self.radius_shrink_rate
-        activity_growth = recent_activity * self.activation_radius_factor * self.max_radius
-        self.radius = np.clip(self.radius + activity_growth, self.min_radius, self.max_radius)
-
-    def try_activate(self, input_value: float, network: 'SpatialNeuralNetwork') -> bool:
-        # Clip input value to prevent overflow
-        input_value = np.clip(input_value, 0.0, 1.0)
-
-        if network.can_spend_activation():
-            if input_value >= self.activation_threshold:
-                self.activation = input_value
-                self.activation_history.append(input_value)
-                self.last_activation_time = network.time_step
-                network.spend_activation()
-                return True
-        return False
-
-
-class SpatialNeuralNetwork:
-    def __init__(self, params: NetworkParameters):
-        # Network parameters
-        self.params = params
-
-        # Neuron collections
-        self.neurons: Dict[int, Neuron] = {}
-        self.input_neurons: Set[Neuron] = set()
-        self.hidden_neurons: Set[Neuron] = set()
-        self.output_neurons: Set[Neuron] = set()
-        self.interface_neurons: Set[Neuron] = set()
-
-        # Timing and activation tracking
-        self.time_step = 0
-        self.window_start_time = 0
-        self.window_activations = 0
-        self.window_history: Deque[dict] = deque(maxlen=100)
-        self.activation_times: Deque[int] = deque()
-
-        # Thread safety controls
-        self.neuron_lock = RLock()  # Reentrant lock for neuron operations
-        self.connection_lock = Lock()  # Lock for connection updates
-        self.activation_lock = Lock()  # Lock for activation budget
-        self.collection_lock = Lock()  # Lock for modifying neuron collections
-        self.window_lock = Lock()  # Lock for window operations
-
-        # Thread pool for parallel operations
-        self.pool = concurrent.futures.ThreadPoolExecutor(
-            max_workers=min(50, (params.total_neurons // 50) + 1)
-        )
-
-    def add_neuron(self, neuron: Neuron):
-        with self.collection_lock:
-            self.neurons[neuron.id] = neuron
-            if neuron.type == NeuronType.INPUT:
-                self.input_neurons.add(neuron)
-            elif neuron.type == NeuronType.HIDDEN:
-                self.hidden_neurons.add(neuron)
-                if not neuron.radius_mutable:
-                    self.interface_neurons.add(neuron)
-            else:
-                self.output_neurons.add(neuron)
-
-    def get_network_state(self) -> dict:
-        with self.neuron_lock:
-            return {
-                'volume_size': self.params.volume_size,
-                'neuron_positions': {
-                    neuron.id: {
-                        'position': (neuron.position.x, neuron.position.y, neuron.position.z),
-                        'type': neuron.type,
-                        'radius': neuron.radius,
-                        'activation': neuron.activation
-                    }
-                    for neuron in self.neurons.values()
-                }
-            }
-
-    def update_neuron_positions(self, new_positions: dict) -> None:
-        with self.neuron_lock:
-            for neuron_id, new_pos in new_positions.items():
-                if neuron_id in self.neurons:
-                    self.neurons[neuron_id].position = Position(
-                        x=new_pos[0],
-                        y=new_pos[1],
-                        z=new_pos[2]
-                    )
-        self.update_connections()
-
-    def get_hidden_neuron_positions(self) -> Dict[int, Tuple[float, float, float]]:
-        with self.neuron_lock:
-            return {neuron.id: (neuron.position.x, neuron.position.y, neuron.position.z)
-                    for neuron in self.hidden_neurons}
-
-    def update_hidden_neuron_positions(self, new_positions: Dict[int, Tuple[float, float, float]]) -> None:
-        with self.neuron_lock:
-            for neuron_id, pos in new_positions.items():
-                if neuron_id in self.neurons and self.neurons[neuron_id].type == NeuronType.HIDDEN:
-                    self.neurons[neuron_id].position = Position(
-                        x=pos[0],
-                        y=pos[1],
-                        z=pos[2]
-                    )
-        self.update_connections()
-
-    def update_connections(self):
-        with self.connection_lock:
-            with self.neuron_lock:
-                positions = np.array([[n.position.x, n.position.y, n.position.z]
-                                      for n in self.neurons.values()])
-                neuron_list = list(self.neurons.values())
-
-            if len(positions) == 0:
-                return
-
-            tree = KDTree(positions)
-
-            def update_neuron_connections(neuron_idx):
-                neuron = neuron_list[neuron_idx]
-                if neuron.type == NeuronType.OUTPUT:
-                    return
-
-                indices = tree.query_ball_point(positions[neuron_idx], r=neuron.radius)
-                new_connections = set()
-
-                for idx in indices:
-                    if idx != neuron_idx:
-                        target = neuron_list[idx]
-                        if neuron.can_connect_to(target):
-                            new_connections.add(target)
-
-                with self.neuron_lock:
-                    neuron.connections = new_connections
-
-            futures = [
-                self.pool.submit(update_neuron_connections, i)
-                for i in range(len(neuron_list))
-            ]
-            concurrent.futures.wait(futures)
-
-    def run_cycle(self, inputs: Optional[List[float]] = None) -> List[float]:
-        with self.activation_lock:
-            self.time_step += 1
-
-        if inputs:
-            def process_input(input_pair):
-                input_neuron, input_value = input_pair
-                with self.neuron_lock:
-                    return input_neuron.try_activate(input_value, self)
-
-            input_pairs = list(zip(self.input_neurons,
-                                   [np.clip(x, 0.0, 1.0) for x in inputs]))
-            futures = [
-                self.pool.submit(process_input, pair)
-                for pair in input_pairs
-            ]
-            concurrent.futures.wait(futures)
-
-        def process_hidden_neuron(neuron):
-            with self.neuron_lock:
-                weighted_inputs = []
-                for n in self.neurons.values():
-                    if neuron in n.connections:
-                        weight = n.calculate_weight(neuron)
-                        contribution = n.activation * weight
-                        weighted_inputs.append(contribution)
-
-                if weighted_inputs:
-                    total_input = np.clip(np.sum(weighted_inputs), 0.0, 1.0)
-                    if len(weighted_inputs) > 1:
-                        total_input /= len(weighted_inputs)
-                else:
-                    total_input = 0.0
-
-                return neuron.try_activate(total_input, self)
-
-        futures = [
-            self.pool.submit(process_hidden_neuron, neuron)
-            for neuron in self.hidden_neurons
-        ]
-        concurrent.futures.wait(futures)
-
-        with self.neuron_lock:
-            outputs = [neuron.activation for neuron in self.output_neurons]
-
-        if self.update_window():
-            def update_neuron_radius(neuron):
-                with self.neuron_lock:
-                    neuron.update_radius(self.time_step)
-
-            futures = [
-                self.pool.submit(update_neuron_radius, neuron)
-                for neuron in self.neurons.values()
-            ]
-            concurrent.futures.wait(futures)
-
-            self.update_connections()
-
-        return outputs
-
-    def run_evaluation(self, steps: int) -> dict:
-        results = self.run_window(steps)
-        return {
-            'activation_count': self.window_activations,
-            'window_stats': self.get_window_stats(),
-            'network_state': self.get_network_state()
-        }
-
-    def update_window(self) -> bool:
-        with self.window_lock:
-            if (self.time_step - self.window_start_time) >= self.params.time_window_size:
-                window_stats = {
-                    'start_time': self.window_start_time,
-                    'end_time': self.time_step,
-                    'total_activations': self.window_activations,
-                    'activation_times': list(self.activation_times)
-                }
-                self.window_history.append(window_stats)
-
-                self.window_start_time = self.time_step
-                self.window_activations = 0
-                self.activation_times.clear()
-                return True
-            return False
-
-    def can_spend_activation(self) -> bool:
-        with self.activation_lock:
-            return self.window_activations < self.params.activation_budget
-
-    def spend_activation(self) -> None:
-        with self.activation_lock:
-            self.window_activations += 1
-            self.activation_times.append(self.time_step)
-
-    def run_window(self, cycles: int, input_sequence: Optional[List[List[float]]] = None) -> dict:
-        window_outputs = []
-        completed_cycles = 0
-
-        for i in range(cycles):
-            with self.activation_lock:
-                if self.window_activations >= self.params.activation_budget:
-                    break
-
-            cycle_inputs = input_sequence[i] if input_sequence else None
-            outputs = self.run_cycle(cycle_inputs)
-            window_outputs.append(outputs)
-            completed_cycles = i + 1
-
-        return {
-            'outputs': window_outputs,
-            'activations': self.window_activations,
-            'completed_cycles': completed_cycles
-        }
-
-    def get_window_stats(self) -> dict:
-        with self.window_lock:
-            return {
-                'total_activations': self.window_activations,
-                'window_progress': (self.time_step - self.window_start_time) / self.params.time_window_size,
-                'activation_density': len(self.activation_times) / self.params.time_window_size,
-                'remaining_budget': self.params.activation_budget - self.window_activations
-            }
-
-    def compute_unreachable_neurons(self) -> int:
-        """
-        Computes unreachable neurons using component counting.
-        Formula: ((N-C)/(N-1)) maps to connectivity
-        Returns number of unreachable neurons.
-        """
-        with self.neuron_lock:
-            N = len(self.neurons)
-            if N == 0:
-                return 0
-
-            # Initialize Union-Find (using neuron IDs)
-            parent = {neuron.id: neuron.id for neuron in self.neurons.values()}
-
-            # Find with path compression
-            def find(x):
-                if parent[x] != x:
-                    parent[x] = find(parent[x])
-                return parent[x]
-
-            # Union neurons based on connections
-            for neuron in self.neurons.values():
-                neuron_id = neuron.id
-                for target in neuron.connections:
-                    # Connect both ways
-                    pid = find(neuron_id)
-                    tid = find(target.id)
-                    if pid != tid:
-                        parent[tid] = pid
-
-            # Count unique components
-            C = len(set(find(x) for x in parent))
-
-            # Directly calculate unreachable neurons from component count
-            # When C = 1 (fully connected), unreachable = 0
-            # When C = N (fully disconnected), unreachable = N
-            return N - int((N - C) * N / (N - 1)) if N > 1 else 0
-
-
-def plot_network_with_weights(network: SpatialNeuralNetwork):
-    import matplotlib.pyplot as plt
-    from matplotlib.colors import Normalize
-    from mpl_toolkits.mplot3d.art3d import Line3DCollection
-    from matplotlib.lines import Line2D
-
-    fig = plt.figure(figsize=(12, 8))
-    ax = fig.add_subplot(111, projection='3d')
-    color_map = {
-        NeuronType.INPUT: 'red',
-        NeuronType.HIDDEN: 'blue',
-        NeuronType.OUTPUT: 'green'
-    }
-    # Get all weights for normalization
-    weights = [neuron.calculate_weight(target)
-               for neuron in network.neurons.values()
-               for target in neuron.connections]
-    if not weights:
-        weights = [0.0]  # Avoid errors if weights list is empty
-    norm = Normalize(vmin=min(weights), vmax=max(weights))
-    cmap = plt.get_cmap('viridis')
-    # Create lists to store line segments and their colors
-    line_segments = []
-    colors = []
-    # Plot neurons
-    for neuron in network.neurons.values():
-        # Plot neuron
-        color = 'cyan' if neuron in network.interface_neurons else color_map[neuron.type]
-        ax.scatter(neuron.position.x, neuron.position.y, neuron.position.z,
-                   color=color, s=50)
-        # Prepare connections for Line3DCollection
-        for target in neuron.connections:
-            xs = [neuron.position.x, target.position.x]
-            ys = [neuron.position.y, target.position.y]
-            zs = [neuron.position.z, target.position.z]
-            line_segments.append(list(zip(xs, ys, zs)))
-            weight = neuron.calculate_weight(target)
-            colors.append(weight)
-    if line_segments:
-        # Create a Line3DCollection with the line segments
-        lc = Line3DCollection(line_segments, cmap=cmap, norm=norm)
-        lc.set_array(np.array(colors))
-        ax.add_collection(lc)
-        # Add colorbar for weights
-        cbar = fig.colorbar(lc, ax=ax, label='Connection Weight')
-    # Add legend
-    legend_elements = [
-        Line2D([0], [0], marker='o', color='w', markerfacecolor='red',
-               label='Input Neuron', markersize=10),
-        Line2D([0], [0], marker='o', color='w', markerfacecolor='blue',
-               label='Hidden Neuron', markersize=10),
-        Line2D([0], [0], marker='o', color='w', markerfacecolor='cyan',
-               label='Interface Neuron', markersize=10),
-        Line2D([0], [0], marker='o', color='w', markerfacecolor='green',
-               label='Output Neuron', markersize=10)
-    ]
-    ax.legend(handles=legend_elements)
-    ax.set_xlabel('X')
-    ax.set_ylabel('Y')
-    ax.set_zlabel('Z')
-    ax.set_title('3D Spatial Neural Network with Connection Weights Heatmap')
-
-
-def create_network(params: NetworkParameters) -> SpatialNeuralNetwork:
-    network = SpatialNeuralNetwork(params)
-    id_counter = 0
-
-    input_radius = params.max_radius * params.input_radius_factor
-    interface_radius = params.max_radius * params.interface_radius_factor
-
-    # Set to keep track of occupied positions
-    occupied_positions = set()
-
-    def is_position_occupied(position: Position) -> bool:
-        position_key = (int(position.x), int(position.y), int(position.z))
-        return position_key in occupied_positions
-
-    def add_position(position: Position):
-        position_key = (int(position.x), int(position.y), int(position.z))
-        occupied_positions.add(position_key)
-
-    # Create input and interface neurons
-    for _ in range(params.num_input):
-        # Generate unique position for input neuron using integer positions
-        while True:
-            input_pos = Position(
-                x=float(np.random.randint(0, int(params.volume_size))),
-                y=float(np.random.randint(0, int(params.volume_size))),
-                z=float(np.random.randint(0, int(params.volume_size)))
-            )
-            if not is_position_occupied(input_pos):
-                add_position(input_pos)
-                break
-
-        input_neuron = Neuron(id_counter, NeuronType.INPUT, input_pos, params)
-        input_neuron.radius = input_radius
-        input_neuron.radius_mutable = False
-        network.add_neuron(input_neuron)
-        id_counter += 1
-
-        # Generate unique position for interface neuron adjacent to input
-        while True:
-            # Pick a random adjacent position (including diagonals)
-            dx = np.random.randint(-1, 2)
-            dy = np.random.randint(-1, 2)
-            dz = np.random.randint(-1, 2)
-            interface_pos = Position(
-                x=float((int(input_pos.x) + dx) % int(params.volume_size)),
-                y=float((int(input_pos.y) + dy) % int(params.volume_size)),
-                z=float((int(input_pos.z) + dz) % int(params.volume_size))
-            )
-            if not is_position_occupied(interface_pos):
-                add_position(interface_pos)
-                break
-
-        interface_neuron = Neuron(id_counter, NeuronType.HIDDEN, interface_pos, params)
-        interface_neuron.radius = interface_radius
-        interface_neuron.radius_mutable = False
-        network.add_neuron(interface_neuron)
-        id_counter += 1
-
-    # Create hidden neurons
-    for _ in range(params.num_hidden):
-        while True:
-            pos = Position(
-                x=float(np.random.randint(0, int(params.volume_size))),
-                y=float(np.random.randint(0, int(params.volume_size))),
-                z=float(np.random.randint(0, int(params.volume_size)))
-            )
-            if not is_position_occupied(pos):
-                add_position(pos)
-                break
-
-        neuron = Neuron(id_counter, NeuronType.HIDDEN, pos, params)
-        min_hidden_radius = params.hidden_radius_range[0] * params.max_radius
-        max_hidden_radius = params.hidden_radius_range[1] * params.max_radius
-        neuron.radius = np.random.uniform(min_hidden_radius, max_hidden_radius)
-        network.add_neuron(neuron)
-        id_counter += 1
-
-    # Create output neurons
-    for _ in range(params.num_output):
-        while True:
-            pos = Position(
-                x=float(np.random.randint(0, int(params.volume_size))),
-                y=float(np.random.randint(0, int(params.volume_size))),
-                z=float(np.random.randint(0, int(params.volume_size)))
-            )
-            if not is_position_occupied(pos):
-                add_position(pos)
-                break
-
-        output_neuron = Neuron(id_counter, NeuronType.OUTPUT, pos, params)
-        output_neuron.radius = 0.0
-        output_neuron.radius_mutable = False
-        network.add_neuron(output_neuron)
-        id_counter += 1
-
-    network.update_connections()
-    return network
+from dataclasses import dataclass
+from collections import defaultdict, deque
+from enum import Enum
+import numpy as np
+from scipy.spatial import KDTree
+import concurrent.futures
+from threading import Lock, RLock
 
 
 class NetworkMonitorWindow:
@@ -585,8 +44,14 @@ class NetworkMonitorWindow:
         self.path_steps = []
         self.lock = threading.Lock()
 
+        # **Add an attribute to store all drop positions**
+        self.all_drops = []
+
         # **Visualization Enabled Flag**
         self.visualization_enabled = True  # Default to enabled
+
+        # **Track the last position to handle wrapping**
+        self.last_position = None
 
         # Start window in separate thread
         self.thread = threading.Thread(target=self.create_window, daemon=True)
@@ -734,6 +199,13 @@ class NetworkMonitorWindow:
         except Exception as e:
             print(f"Error updating path step: {e}")
 
+    def clear_drops(self):
+        """Thread-safe method to clear all drops from the visualization"""
+        try:
+            self.queue.put({'type': 'clear_drops'})
+        except Exception as e:
+            print(f"Error clearing drops: {e}")
+
     def _handle_message(self, message: Dict):
         """Handle different types of messages"""
         message_type = message.get('type')
@@ -745,6 +217,8 @@ class NetworkMonitorWindow:
             self._update_drop_locations_display(message.get('data'))
         elif message_type == 'path_step':
             self._update_path_display(message.get('position'))
+        elif message_type == 'clear_drops':
+            self._clear_drops_display()
 
     def _update_connectivity_display(self, value: float):
         """Update connectivity GUI elements"""
@@ -783,11 +257,11 @@ class NetworkMonitorWindow:
                 xs.append(pos[0])
                 ys.append(pos[1])
                 zs.append(pos[2])
-                if neuron_type == NeuronType.INPUT:
+                if neuron_type == NeuronType.INPUT.value:
                     colors.append('green')
-                elif neuron_type == NeuronType.OUTPUT:
+                elif neuron_type == NeuronType.OUTPUT.value:
                     colors.append('blue')
-                elif neuron_type == NeuronType.HIDDEN:
+                elif neuron_type == NeuronType.HIDDEN.value:
                     colors.append('purple')
                 else:
                     colors.append('gray')  # Default color for unknown types
@@ -804,23 +278,40 @@ class NetworkMonitorWindow:
             return  # **Respect the Visualization Toggle**
 
         try:
-            xs = [drop.x for drop in drops]
-            ys = [drop.y for drop in drops]
-            zs = [drop.z for drop in drops]
+            # Append new drops to the accumulated list
+            for drop in drops:
+                self.all_drops.append(drop)
 
-            # Append new drops
+            # Extract X, Y, Z coordinates from all accumulated drops
+            xs = [drop.x for drop in self.all_drops]
+            ys = [drop.y for drop in self.all_drops]
+            zs = [drop.z for drop in self.all_drops]
+
+            # Update the scatter plot with all drops
             self.drop_scatter._offsets3d = (xs, ys, zs)
             self.canvas.draw()
         except Exception as e:
             print(f"Error updating drop locations display: {e}")
 
     def _update_path_display(self, position: Position):
-        """Update the path visualization on the 3D plot"""
+        """Update the path visualization on the 3D plot, handling toroidal wrapping."""
         if not self.visualization_enabled:
             return  # **Respect the Visualization Toggle**
 
         try:
-            self.path_steps.append((position.x, position.y, position.z))
+            new_pos = (position.x, position.y, position.z)
+            if self.last_position is not None:
+                wrapped_segments = self.split_wrapped_path(self.last_position, new_pos, self.volume_size)
+                for pos in wrapped_segments[:-1]:
+                    self.path_steps.append(pos)
+                self.path_steps.append(new_pos)
+            else:
+                self.path_steps.append(new_pos)
+
+            # Update the last_position
+            self.last_position = new_pos
+
+            # Update the path_line with new path_steps
             if len(self.path_steps) > 1:
                 xs, ys, zs = zip(*self.path_steps)
                 self.path_line.set_data(xs, ys)
@@ -829,41 +320,99 @@ class NetworkMonitorWindow:
         except Exception as e:
             print(f"Error updating path display: {e}")
 
+    def split_wrapped_path(self, last_pos: tuple[float, float, float], new_pos: tuple[float, float, float],
+                           volume_size: float) -> list[tuple[float, float, float]]:
+        """
+        Split the path into segments that handle wrapping in toroidal space.
+
+        Args:
+            last_pos (Tuple[float, float, float]): The last position (x, y, z).
+            new_pos (Tuple[float, float, float]): The new position (x, y, z).
+            volume_size (float): The size of the spatial volume.
+
+        Returns:
+            List[Tuple[float, float, float]]: A list of positions including intermediate boundary points.
+        """
+        wrapped_positions = []
+        intermediate_positions = []
+        x1, y1, z1 = last_pos
+        x2, y2, z2 = new_pos
+
+        # Handle wrapping in x
+        dx = x2 - x1
+        if dx > volume_size / 2:
+            # Wrapped around negative side
+            intermediate_positions.append((volume_size, y1, z1))
+            intermediate_positions.append((0.0, y1, z1))
+        elif dx < -volume_size / 2:
+            # Wrapped around positive side
+            intermediate_positions.append((0.0, y1, z1))
+            intermediate_positions.append((volume_size, y1, z1))
+
+        # Handle wrapping in y
+        dy = y2 - y1
+        if dy > volume_size / 2:
+            # Wrapped around negative side
+            intermediate_positions.append((x1, volume_size, z1))
+            intermediate_positions.append((x1, 0.0, z1))
+        elif dy < -volume_size / 2:
+            # Wrapped around positive side
+            intermediate_positions.append((x1, 0.0, z1))
+            intermediate_positions.append((x1, volume_size, z1))
+
+        # Handle wrapping in z
+        dz = z2 - z1
+        if dz > volume_size / 2:
+            # Wrapped around negative side
+            intermediate_positions.append((x1, y1, volume_size))
+            intermediate_positions.append((x1, y1, 0.0))
+        elif dz < -volume_size / 2:
+            # Wrapped around positive side
+            intermediate_positions.append((x1, y1, 0.0))
+            intermediate_positions.append((x1, y1, volume_size))
+
+        # Insert intermediate positions
+        for pos in intermediate_positions:
+            wrapped_positions.append(pos)
+
+        # Finally, append the new position
+        wrapped_positions.append(new_pos)
+
+        return wrapped_positions
+
+    def _clear_drops_display(self):
+        """Clear all drops from the 3D plot"""
+        if not self.visualization_enabled:
+            return  # **Respect the Visualization Toggle**
+
+        try:
+            self.all_drops = []
+            self.drop_scatter._offsets3d = ([], [], [])
+            self.canvas.draw()
+        except Exception as e:
+            print(f"Error clearing drops display: {e}")
+
 
 class NetworkEvolutionFitness:
     def __init__(
             self,
-            network_params: Dict[str, any],
-            update_best_func=None,
-            max_path_length: int = 60,
-            path_step_reward: float = 1.00,
-            pickup_reward: float = 1.,
-            successful_drop_reward: float = 4.,
-            failed_drop_penalty: float = -2.,
-            empty_bag_reward: float = 10.00,
-            step_penalty: float = -100.00,
+            config: Dict[str, any],
+            update_best_func: Optional[Callable[[any, float], None]] = None,
             debug: bool = False
     ):
         """
         Initialize Phase 1 fitness evaluation focusing on network connectivity structure.
+
+        Args:
+            config (Dict[str, any]): Configuration dictionary containing all parameters.
+            update_best_func (Callable, optional): Callback function to update the best organism.
+            debug (bool, optional): Flag to enable debug mode.
         """
-        # Centralized Reward, Penalty, and Parameter Definitions
-        self.max_path_length = max_path_length
-        self.path_step_reward = path_step_reward
-        self.pickup_reward = pickup_reward
-        self.successful_drop_reward = successful_drop_reward
-        self.failed_drop_penalty = failed_drop_penalty
-        self.empty_bag_reward = empty_bag_reward
-        self.step_penalty = step_penalty
+        # Extract network parameters and path rewards from config
+        network_params = config.get('network_params', {})
+        path_rewards = config.get('path_rewards', {})
 
-        # Debug and Update Function
-        self.debug = debug
-        self.update_best = update_best_func
-
-        # Define genes for path evolution
-        self.genes = ['U', 'D', 'F', 'B', 'L', 'R', 'DR']
-
-        # Create network parameters using the provided network_params dictionary
+        # Initialize NetworkParameters
         self.network_params = NetworkParameters(
             volume_size=network_params.get('volume_size', 10.0),
             num_input=network_params.get('num_input', 100),
@@ -884,6 +433,22 @@ class NetworkEvolutionFitness:
 
         # Initialize the spatial neural network with the defined parameters
         self.network = create_network(self.network_params)
+
+        # Initialize path reward parameters
+        self.max_path_length = path_rewards.get('max_path_length', 60)
+        self.path_step_reward = path_rewards.get('path_step_reward', 1.00)
+        self.pickup_reward = path_rewards.get('pickup_reward', 0.5)
+        self.successful_drop_reward = path_rewards.get('successful_drop_reward', 5.0)
+        self.failed_drop_penalty = path_rewards.get('failed_drop_penalty', -0.0)
+        self.empty_bag_reward = path_rewards.get('empty_bag_reward', 10.00)
+        self.step_penalty = path_rewards.get('step_penalty', -10.0)
+
+        # Debug and Update Function
+        self.debug = debug
+        self.update_best = update_best_func
+
+        # Define genes for path evolution
+        self.genes = ['U', 'D', 'F', 'B', 'L', 'R', 'DR']
 
         # Initialize persistent path state
         self.pickup_bag = []
@@ -913,6 +478,7 @@ class NetworkEvolutionFitness:
         Start a background thread to continuously update the monitor window
         with the full network state at regular intervals.
         """
+
         def update_loop():
             while True:
                 try:
@@ -936,7 +502,7 @@ class NetworkEvolutionFitness:
         if total_neurons == 0:
             connectivity = 0.0
         else:
-            connectivity = (1.0 - (unreachable / total_neurons)) * 100
+            connectivity = unreachable
 
         # Update monitor if it exists and change is significant
         try:
@@ -951,6 +517,10 @@ class NetworkEvolutionFitness:
 
     def execute_path(self, path: List[str]) -> Dict:
         """Execute movement path to modify network structure"""
+        # **Clear existing drops from previous evaluation**
+        if self.monitor:
+            self.monitor.clear_drops()
+
         # Use a local set to track processed neurons within this evaluation
         processed_neurons = set()
 
@@ -977,9 +547,6 @@ class NetworkEvolutionFitness:
 
         # Track when we pass the step limit
         step_limit_passed = False
-
-        # Collect drop positions for visualization
-        drop_positions = []
 
         for command in path:
             # Check if we're passing the step limit
@@ -1013,9 +580,10 @@ class NetworkEvolutionFitness:
                     # Mark neuron as processed
                     processed_neurons.add(neuron_id)
 
-                    # Record drop position
+                    # **Send the drop position immediately to the monitor**
                     drop_pos = Position(*current_pos_tuple)
-                    drop_positions.append(drop_pos)
+                    if self.monitor and self.monitor.visualization_enabled:
+                        self.monitor.update_drop_locations([drop_pos])
 
                     if not step_limit_passed:
                         # Reward for successful drop within limit
@@ -1079,19 +647,6 @@ class NetworkEvolutionFitness:
             if self.monitor and self.monitor.visualization_enabled:
                 time.sleep(0.05)  # Adjust as needed
 
-        # Apply reward for empty pickup bag at the end
-        if not self.pickup_bag:
-            path_score += self.empty_bag_reward
-            if self.debug:
-                print("Empty pickup bag reward applied.")
-        else:
-            if self.debug:
-                print(f"Pickup bag not empty. Remaining neurons: {len(self.pickup_bag)}")
-
-        # Send drop locations to the monitor if visualization is enabled
-        if self.monitor and self.monitor.visualization_enabled and drop_positions:
-            self.monitor.update_drop_locations(drop_positions)
-
         if position_updates:
             self.network.update_neuron_positions(position_updates)
 
@@ -1111,6 +666,13 @@ class NetworkEvolutionFitness:
     def compute(self, encoded_individual, ga_instance) -> float:
         """
         Phase 1 fitness computation with network visualization at 100% connectivity.
+
+        Args:
+            encoded_individual: The encoded genome representing the path.
+            ga_instance: The genetic algorithm instance.
+
+        Returns:
+            float: The calculated fitness score.
         """
         # Decode and execute path
         path = ga_instance.decode_organism(encoded_individual) if ga_instance else encoded_individual
@@ -1134,8 +696,8 @@ class NetworkEvolutionFitness:
             # Exit the program since connectivity is achieved
             sys.exit(0)
 
-        # Final fitness calculation
-        fitness = abs(path_score) ** (connectivity_score * 0.001)
+        # Final fitness calculation using configuration parameters
+        fitness = (path_score * self.path_step_reward) + (connectivity_score * 2)
 
         if self.debug:
             print(f"\nFitness Calculation Details:")
@@ -1154,12 +716,12 @@ class NetworkEvolutionFitness:
     def move(self, direction: str) -> Optional[Position]:
         """Calculate new position after movement"""
         moves = {
-            'U': (0, 0, 1),    # Up along Z-axis
-            'D': (0, 0, -1),   # Down along Z-axis
-            'F': (1, 0, 0),    # Forward along X-axis
-            'B': (-1, 0, 0),   # Backward along X-axis
-            'L': (0, 1, 0),    # Left along Y-axis
-            'R': (0, -1, 0)    # Right along Y-axis
+            'U': (0, 0, 1),  # Up along Z-axis
+            'D': (0, 0, -1),  # Down along Z-axis
+            'F': (1, 0, 0),  # Forward along X-axis
+            'B': (-1, 0, 0),  # Backward along X-axis
+            'L': (0, 1, 0),  # Left along Y-axis
+            'R': (0, -1, 0)  # Right along Y-axis
             # You can add more directions here for full 3D movement
         }
 
@@ -1201,87 +763,3 @@ class NetworkEvolutionFitness:
                 'current_position': (self.current_pos.x, self.current_pos.y, self.current_pos.z)
             }
         }
-
-
-def main():
-    # Main Execution Block
-
-    # Define consistent network parameters
-    network_params = {
-        'volume_size': 8.0,
-        'num_input': 100,  # Align with fitness function
-        'num_output': 4,  # Align with fitness function
-        'total_neurons': 500,  # Align with fitness function
-        'activation_budget': 1000,  # Ensure all necessary parameters are included
-        'time_window_size': 100
-    }
-
-    # Create network with consistent parameters
-    params = NetworkParameters(
-        volume_size=network_params['volume_size'],
-        num_input=network_params['num_input'],
-        num_output=network_params['num_output'],
-        total_neurons=network_params['total_neurons'],
-        activation_budget=network_params['activation_budget'],
-        time_window_size=network_params['time_window_size']
-    )
-    network = create_network(params)
-
-    # Compute number of unreachable neurons
-    unreachable_neurons = network.compute_unreachable_neurons()
-    print(f"Initial number of unreachable neurons: {unreachable_neurons}")
-
-    # Get positions of hidden neurons
-    hidden_positions = network.get_hidden_neuron_positions()
-
-    # Example: Modify positions of hidden neurons (e.g., move them randomly)
-    modified_positions = {}
-    for neuron_id, pos in hidden_positions.items():
-        dx = np.random.uniform(-1.0, 1.0)
-        dy = np.random.uniform(-1.0, 1.0)
-        dz = np.random.uniform(-1.0, 1.0)
-        new_pos = (pos[0] + dx, pos[1] + dy, pos[2] + dz)
-        # Ensure new positions are within volume boundaries
-        new_pos = (
-            max(0.0, min(new_pos[0], params.volume_size)),
-            max(0.0, min(new_pos[1], params.volume_size)),
-            max(0.0, min(new_pos[2], params.volume_size))
-        )
-        modified_positions[neuron_id] = new_pos
-
-    # Update hidden neuron positions in the network
-    network.update_hidden_neuron_positions(modified_positions)
-
-    # Recompute number of unreachable neurons after modification
-    unreachable_neurons_after = network.compute_unreachable_neurons()
-    print(f"Number of unreachable neurons after modification: {unreachable_neurons_after}")
-
-    # Initialize the Network Evolution Fitness
-    fitness_evaluator = NetworkEvolutionFitness(
-        network_params=network_params,
-        debug=True  # Set to True to enable debug messages
-    )
-
-    # Example: Run multiple fitness evaluations with sample paths
-    sample_paths = [
-        ['F', 'F', 'U', 'F', 'DR', 'B', 'D', 'DR'],
-        ['U', 'U', 'F', 'DR', 'F', 'F', 'DR', 'B'],
-        ['L', 'L', 'F', 'F', 'DR', 'R', 'D', 'DR'],
-        ['F', 'D', 'F', 'F', 'DR', 'B', 'U', 'DR']
-        # Add more paths as needed
-    ]
-
-    for path in sample_paths:
-        fitness_score = fitness_evaluator.compute(path, ga_instance=None)
-        print(f"Fitness Score for path {path}: {fitness_score}")
-
-    # Keep the main thread alive to allow background updates
-    try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        print("Exiting main program.")
-
-
-if __name__ == "__main__":
-    main()

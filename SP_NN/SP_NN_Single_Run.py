@@ -1,3 +1,5 @@
+# experiment_runner.py
+
 import random
 import numpy as np
 from M_E_GA import M_E_GA_Base, M_E_Engine
@@ -8,50 +10,62 @@ class ExperimentRunner:
     def __init__(self, debug: bool = False, config_file=None):
         self.debug = debug
 
-        # Network configuration - core structural parameters only
-        # Input/Output neuron counts are managed by fitness class based on simulation requirements
-        self.network_params = {
-            # Core network structure
-            'volume_size': 10.0,
-            'total_neurons': 300,
+        # Comprehensive configuration dictionary
+        self.config = {
+            'network_params': {
+                # Core network structure
+                'volume_size': 35.0,
+                'num_input': 10,
+                'num_output': 20,
+                'total_neurons': 100,
 
-            # Neuron radius parameters
-            'max_radius': 2.0,
-            'min_radius': 1.50,
-            'hidden_radius_range': (1.0, 0.50),
-            'base_radius_shrink_rate': 0.95,
-            'input_radius_factor': .60,
-            'interface_radius_factor': .60,
-            'interface_offset': 1.0,
+                # Neuron radius parameters
+                'max_radius': 3.0,
+                'min_radius': 1.0,
+                'hidden_radius_range': (.50, 1.0),
+                'base_radius_shrink_rate': 0.95,
+                'input_radius_factor': 1.0,
+                'interface_radius_factor': 1.0,
+                'interface_offset': 1.0,
 
-            # Activation parameters
-            'activation_budget': 1000,
-            'time_window_size': 50,
-            'activation_threshold': 0.5,
-            'activation_radius_factor': 0.2
+                # Activation parameters
+                'activation_budget': 1000,
+                'time_window_size': 100,
+                'activation_threshold': 0.5,
+                'activation_radius_factor': 0.2
+            },
+            'path_rewards': {
+                'max_path_length': 50,
+                'path_step_reward': 1.0,
+                'pickup_reward': 2.0,
+                'successful_drop_reward': 5.0,
+                'failed_drop_penalty': -0.0,
+                'empty_bag_reward': 10.00,
+                'step_penalty': -10.0
+            }
         }
 
-        # GA configuration remains the same
+        # GA configuration
         self.ga_config = {
-        'mutation_prob': 0.15,
-        'delimited_mutation_prob': 0.10,
-        'open_mutation_prob': 0.05,
-        'capture_mutation_prob': 0.03,
-        'delimiter_insert_prob': 0.04,
-        'delimit_delete_prob': 0.05,
-        'crossover_prob': 0.00,
-        'elitism_ratio': 0.00,
-        'base_gene_prob': 0.25,
-        'capture_gene_prob': 0.04,
-        'max_individual_length': 100,
-        'population_size': 400,
-        'num_parents': 200,
-        'max_generations': 1000,
-        'delimiters': False,
-        'delimiter_space': 2,
-        'logging': False,
-        'experiment_name': 'neural_evolution',
-        'seed': None
+            'mutation_prob': 0.15,
+            'delimited_mutation_prob': 0.08,
+            'open_mutation_prob': 0.04,
+            'capture_mutation_prob': 0.05,
+            'delimiter_insert_prob': 0.04,
+            'delimit_delete_prob': 0.05,
+            'crossover_prob': 0.00,
+            'elitism_ratio': 0.00,
+            'base_gene_prob': 0.30,
+            'capture_gene_prob': 0.04,
+            'max_individual_length': 100,
+            'population_size': 400,
+            'num_parents': 200,
+            'max_generations': 1000,
+            'delimiters': False,
+            'delimiter_space': 2,
+            'logging': False,
+            'experiment_name': 'neural_evolution',
+            'seed': None
         }
 
         # Best solution tracking
@@ -82,16 +96,14 @@ class ExperimentRunner:
                 print(f"Hidden neurons: {stats['network']['hidden_neurons']}")
                 print(f"Output neurons: {stats['network']['output_neurons']}")
                 print("\nActivation Parameters:")
-                print(f"Activation budget: {self.network_params['activation_budget']}")
-                print(f"Time window: {self.network_params['time_window_size']}")
+                print(f"Activation budget: {self.config['network_params']['activation_budget']}")
+                print(f"Time window: {self.config['network_params']['time_window_size']}")
 
     def setup_experiment(self):
         # Create fitness function with update callback
         self.fitness_function = NetworkEvolutionFitness(
-            network_params=self.network_params,
+            config=self.config,
             update_best_func=self.update_best_organism,
-            max_path_length=70,
-            path_step_reward=1.0,
             debug=self.debug  # Pass debug flag to fitness function
         )
 
@@ -105,10 +117,11 @@ class ExperimentRunner:
     def run_experiment(self):
         if self.debug:
             print("Starting Neural Evolution Experiment...")
-            print("\nCore Network Parameters:")
-            for key, value in self.network_params.items():
-                print(f"  {key}: {value}")
-            print("\nNote: Input/Output neuron counts are managed by fitness class")
+            print("\nComprehensive Configuration:")
+            for section, params in self.config.items():
+                print(f"\n{section.replace('_', ' ').title()}:")
+                for key, value in params.items():
+                    print(f"  {key}: {value}")
             print(f"\nPopulation size: {self.ga_config['population_size']}")
             print(f"Max generations: {self.ga_config['max_generations']}\n")
 
