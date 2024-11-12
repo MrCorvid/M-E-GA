@@ -28,8 +28,8 @@ class Position:
 
     def distance_to(self, other: 'Position') -> float:
         return np.sqrt((self.x - other.x) ** 2 +
-                       (self.y - other.y) ** 2 +
-                       (self.z - other.z) ** 2)
+                      (self.y - other.y) ** 2 +
+                      (self.z - other.z) ** 2)
 
 
 @dataclass
@@ -356,43 +356,66 @@ class SpatialNeuralNetwork:
                 'remaining_budget': self.params.activation_budget - self.window_activations
             }
 
-    def compute_unreachable_neurons(self) -> int:
+    def compute_unreachable_neurons(self) -> float:
         """
-        Computes unreachable neurons using component counting.
-        Formula: ((N-C)/(N-1)) maps to connectivity
-        Returns number of unreachable neurons.
+        Computes the connectivity score of neurons using component counting.
+        The score ranges from 0 to 100:
+            - 0 indicates low connectivity (high fragmentation).
+            - 100 indicates full connectivity (single connected component).
+
+        Returns:
+            float: Connectivity score between 0 and 100.
         """
         with self.neuron_lock:
             N = len(self.neurons)
-            if N == 0:
-                return 0
+            if N <= 1:
+                # If there are 0 or 1 neurons, the network is trivially fully connected
+                return 100.0
 
-            # Initialize Union-Find (using neuron IDs)
+            # Initialize Union-Find (Disjoint Set Union) structure
             parent = {neuron.id: neuron.id for neuron in self.neurons.values()}
+            rank = {neuron.id: 0 for neuron in self.neurons.values()}
 
-            # Find with path compression
             def find(x):
-                if parent[x] != x:
-                    parent[x] = find(parent[x])
-                return parent[x]
+                """Finds the root parent of x with path compression."""
+                while parent[x] != x:
+                    parent[x] = parent[parent[x]]  # Path compression
+                    x = parent[x]
+                return x
+
+            def union(x, y):
+                """Unites the sets containing x and y using union by rank."""
+                root_x = find(x)
+                root_y = find(y)
+                if root_x == root_y:
+                    return
+                if rank[root_x] < rank[root_y]:
+                    parent[root_x] = root_y
+                else:
+                    parent[root_y] = root_x
+                    if rank[root_x] == rank[root_y]:
+                        rank[root_x] += 1
 
             # Union neurons based on connections
             for neuron in self.neurons.values():
                 neuron_id = neuron.id
                 for target in neuron.connections:
-                    # Connect both ways
-                    pid = find(neuron_id)
-                    tid = find(target.id)
-                    if pid != tid:
-                        parent[tid] = pid
+                    union(neuron_id, target.id)
 
-            # Count unique components
-            C = len(set(find(x) for x in parent))
+            # Count unique connected components
+            unique_roots = set(find(x) for x in parent)
+            C = len(unique_roots)
 
-            # Directly calculate unreachable neurons from component count
-            # When C = 1 (fully connected), unreachable = 0
-            # When C = N (fully disconnected), unreachable = N
-            return N - int((N - C) * N / (N - 1))
+            # Calculate connectivity score
+            # Formula: ((N - C) / (N - 1)) * 100
+            # - C = 1 (fully connected): ((N - 1) / (N - 1)) * 100 = 100%
+            # - C = N (fully disconnected): ((0) / (N - 1)) * 100 = 0%
+            score = ((N - C) / (N - 1)) * 100
+
+            # Clamp the score to ensure it's within [0, 100]
+            score = max(0.0, min(score, 100.0))
+
+            return score
 
 
 def plot_network_with_weights(network: SpatialNeuralNetwork):
@@ -462,6 +485,8 @@ def create_network(params: NetworkParameters) -> SpatialNeuralNetwork:
     network = SpatialNeuralNetwork(params)
     id_counter = 0
 
+    half_volume = params.volume_size / 2  # Define half the volume size for centering
+
     input_radius = params.max_radius * params.input_radius_factor
     interface_radius = params.max_radius * params.interface_radius_factor
 
@@ -481,9 +506,9 @@ def create_network(params: NetworkParameters) -> SpatialNeuralNetwork:
         # Generate unique position for input neuron using integer positions
         while True:
             input_pos = Position(
-                x=float(np.random.randint(0, int(params.volume_size))),
-                y=float(np.random.randint(0, int(params.volume_size))),
-                z=float(np.random.randint(0, int(params.volume_size)))
+                x=float(np.random.randint(-int(half_volume), int(half_volume))),
+                y=float(np.random.randint(-int(half_volume), int(half_volume))),
+                z=float(np.random.randint(-int(half_volume), int(half_volume)))
             )
             if not is_position_occupied(input_pos):
                 add_position(input_pos)
@@ -501,10 +526,14 @@ def create_network(params: NetworkParameters) -> SpatialNeuralNetwork:
             dx = np.random.randint(-1, 2)
             dy = np.random.randint(-1, 2)
             dz = np.random.randint(-1, 2)
+            # Apply wrapping with centered volume
+            new_x = (int(input_pos.x) + dx + int(half_volume)) % int(params.volume_size) - int(half_volume)
+            new_y = (int(input_pos.y) + dy + int(half_volume)) % int(params.volume_size) - int(half_volume)
+            new_z = (int(input_pos.z) + dz + int(half_volume)) % int(params.volume_size) - int(half_volume)
             interface_pos = Position(
-                x=float((int(input_pos.x) + dx) % int(params.volume_size)),
-                y=float((int(input_pos.y) + dy) % int(params.volume_size)),
-                z=float((int(input_pos.z) + dz) % int(params.volume_size))
+                x=float(new_x),
+                y=float(new_y),
+                z=float(new_z)
             )
             if not is_position_occupied(interface_pos):
                 add_position(interface_pos)
@@ -520,9 +549,9 @@ def create_network(params: NetworkParameters) -> SpatialNeuralNetwork:
     for _ in range(params.num_hidden):
         while True:
             pos = Position(
-                x=float(np.random.randint(0, int(params.volume_size))),
-                y=float(np.random.randint(0, int(params.volume_size))),
-                z=float(np.random.randint(0, int(params.volume_size)))
+                x=float(np.random.randint(-int(half_volume), int(half_volume))),
+                y=float(np.random.randint(-int(half_volume), int(half_volume))),
+                z=float(np.random.randint(-int(half_volume), int(half_volume)))
             )
             if not is_position_occupied(pos):
                 add_position(pos)
@@ -539,9 +568,9 @@ def create_network(params: NetworkParameters) -> SpatialNeuralNetwork:
     for _ in range(params.num_output):
         while True:
             pos = Position(
-                x=float(np.random.randint(0, int(params.volume_size))),
-                y=float(np.random.randint(0, int(params.volume_size))),
-                z=float(np.random.randint(0, int(params.volume_size)))
+                x=float(np.random.randint(-int(half_volume), int(half_volume))),
+                y=float(np.random.randint(-int(half_volume), int(half_volume))),
+                z=float(np.random.randint(-int(half_volume), int(half_volume)))
             )
             if not is_position_occupied(pos):
                 add_position(pos)
@@ -560,10 +589,10 @@ def create_network(params: NetworkParameters) -> SpatialNeuralNetwork:
 if __name__ == "__main__":
     # Define consistent network parameters
     network_params = {
-        'volume_size': 8.0,
-        'num_input': 100,  # Align with fitness function
-        'num_output': 4,  # Align with fitness function
-        'total_neurons': 500,  # Align with fitness function
+        'volume_size': 8.0,  # Example volume size
+        'num_input': 100,     # Align with fitness function
+        'num_output': 4,      # Align with fitness function
+        'total_neurons': 500, # Align with fitness function
         'activation_budget': 1000,  # Ensure all necessary parameters are included
         'time_window_size': 100
     }
@@ -581,6 +610,7 @@ if __name__ == "__main__":
 
     # Compute number of unreachable neurons
     unreachable_neurons = network.compute_unreachable_neurons()
+    print(f"Unreachable Neurons: {unreachable_neurons}")
 
     # Get positions of hidden neurons
     hidden_positions = network.get_hidden_neuron_positions()
@@ -592,6 +622,13 @@ if __name__ == "__main__":
         dy = np.random.uniform(-1.0, 1.0)
         dz = np.random.uniform(-1.0, 1.0)
         new_pos = (pos[0] + dx, pos[1] + dy, pos[2] + dz)
+        # Ensure the new position stays within the volume bounds
+        half_volume = params.volume_size / 2
+        new_pos = (
+            np.clip(new_pos[0], -half_volume, half_volume - 1),
+            np.clip(new_pos[1], -half_volume, half_volume - 1),
+            np.clip(new_pos[2], -half_volume, half_volume - 1)
+        )
         modified_positions[neuron_id] = new_pos
 
     # Update hidden neuron positions in the network
@@ -599,6 +636,7 @@ if __name__ == "__main__":
 
     # Recompute number of unreachable neurons after modification
     unreachable_neurons_after = network.compute_unreachable_neurons()
+    print(f"Unreachable Neurons After Modification: {unreachable_neurons_after}")
 
     # Plot the network
     plot_network_with_weights(network)

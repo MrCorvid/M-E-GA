@@ -104,9 +104,10 @@ class NetworkMonitorWindow:
             # Matplotlib Figure
             self.fig = plt.Figure(figsize=(6, 6), dpi=100)
             self.ax = self.fig.add_subplot(111, projection='3d')
-            self.ax.set_xlim(0, self.volume_size)
-            self.ax.set_ylim(0, self.volume_size)
-            self.ax.set_zlim(0, self.volume_size)
+            half_volume = self.volume_size / 2
+            self.ax.set_xlim(-half_volume, half_volume)
+            self.ax.set_ylim(-half_volume, half_volume)
+            self.ax.set_zlim(-half_volume, half_volume)
             self.ax.set_xlabel('X')
             self.ax.set_ylabel('Y')
             self.ax.set_zlabel('Z')
@@ -300,15 +301,7 @@ class NetworkMonitorWindow:
 
         try:
             new_pos = (position.x, position.y, position.z)
-            if self.last_position is not None:
-                wrapped_segments = self.split_wrapped_path(self.last_position, new_pos, self.volume_size)
-                for pos in wrapped_segments[:-1]:
-                    self.path_steps.append(pos)
-                self.path_steps.append(new_pos)
-            else:
-                self.path_steps.append(new_pos)
-
-            # Update the last_position
+            self.path_steps.append(new_pos)
             self.last_position = new_pos
 
             # Update the path_line with new path_steps
@@ -319,66 +312,6 @@ class NetworkMonitorWindow:
                 self.canvas.draw()
         except Exception as e:
             print(f"Error updating path display: {e}")
-
-    def split_wrapped_path(self, last_pos: tuple[float, float, float], new_pos: tuple[float, float, float],
-                           volume_size: float) -> list[tuple[float, float, float]]:
-        """
-        Split the path into segments that handle wrapping in toroidal space.
-
-        Args:
-            last_pos (Tuple[float, float, float]): The last position (x, y, z).
-            new_pos (Tuple[float, float, float]): The new position (x, y, z).
-            volume_size (float): The size of the spatial volume.
-
-        Returns:
-            List[Tuple[float, float, float]]: A list of positions including intermediate boundary points.
-        """
-        wrapped_positions = []
-        intermediate_positions = []
-        x1, y1, z1 = last_pos
-        x2, y2, z2 = new_pos
-
-        # Handle wrapping in x
-        dx = x2 - x1
-        if dx > volume_size / 2:
-            # Wrapped around negative side
-            intermediate_positions.append((volume_size, y1, z1))
-            intermediate_positions.append((0.0, y1, z1))
-        elif dx < -volume_size / 2:
-            # Wrapped around positive side
-            intermediate_positions.append((0.0, y1, z1))
-            intermediate_positions.append((volume_size, y1, z1))
-
-        # Handle wrapping in y
-        dy = y2 - y1
-        if dy > volume_size / 2:
-            # Wrapped around negative side
-            intermediate_positions.append((x1, volume_size, z1))
-            intermediate_positions.append((x1, 0.0, z1))
-        elif dy < -volume_size / 2:
-            # Wrapped around positive side
-            intermediate_positions.append((x1, 0.0, z1))
-            intermediate_positions.append((x1, volume_size, z1))
-
-        # Handle wrapping in z
-        dz = z2 - z1
-        if dz > volume_size / 2:
-            # Wrapped around negative side
-            intermediate_positions.append((x1, y1, volume_size))
-            intermediate_positions.append((x1, y1, 0.0))
-        elif dz < -volume_size / 2:
-            # Wrapped around positive side
-            intermediate_positions.append((x1, y1, 0.0))
-            intermediate_positions.append((x1, y1, volume_size))
-
-        # Insert intermediate positions
-        for pos in intermediate_positions:
-            wrapped_positions.append(pos)
-
-        # Finally, append the new position
-        wrapped_positions.append(new_pos)
-
-        return wrapped_positions
 
     def _clear_drops_display(self):
         """Clear all drops from the 3D plot"""
@@ -414,10 +347,10 @@ class NetworkEvolutionFitness:
 
         # Initialize NetworkParameters
         self.network_params = NetworkParameters(
-            volume_size=network_params.get('volume_size', 10.0),
+            volume_size=network_params.get('volume_size', 8.0),  # Match the volume size
             num_input=network_params.get('num_input', 100),
             num_output=network_params.get('num_output', 4),
-            total_neurons=network_params.get('total_neurons', 800),
+            total_neurons=network_params.get('total_neurons', 500),
             max_radius=network_params.get('max_radius', 3.0),
             min_radius=network_params.get('min_radius', 0.1),
             input_radius_factor=network_params.get('input_radius_factor', 0.25),
@@ -547,6 +480,8 @@ class NetworkEvolutionFitness:
 
         # Track when we pass the step limit
         step_limit_passed = False
+
+        half_volume = self.network_params.volume_size / 2
 
         for command in path:
             # Check if we're passing the step limit
@@ -697,7 +632,7 @@ class NetworkEvolutionFitness:
             sys.exit(0)
 
         # Final fitness calculation using configuration parameters
-        fitness = (path_score * self.path_step_reward) + (connectivity_score * 2)
+        fitness = (path_score) * (connectivity_score )
 
         if self.debug:
             print(f"\nFitness Calculation Details:")
@@ -727,9 +662,16 @@ class NetworkEvolutionFitness:
 
         if direction in moves:
             dx, dy, dz = moves[direction]
-            new_x = (self.current_pos.x + dx) % self.network_params.volume_size
-            new_y = (self.current_pos.y + dy) % self.network_params.volume_size
-            new_z = (self.current_pos.z + dz) % self.network_params.volume_size
+            half_volume = self.network_params.volume_size / 2
+            new_x = self.current_pos.x + dx
+            new_y = self.current_pos.y + dy
+            new_z = self.current_pos.z + dz
+
+            # Apply wrapping with centered volume
+            new_x = ((new_x + half_volume) % self.network_params.volume_size) - half_volume
+            new_y = ((new_y + half_volume) % self.network_params.volume_size) - half_volume
+            new_z = ((new_z + half_volume) % self.network_params.volume_size) - half_volume
+
             return Position(float(new_x), float(new_y), float(new_z))
         return None
 
