@@ -35,13 +35,13 @@ class ExperimentRunner:
                 'activation_radius_factor': 0.2
             },
             'path_rewards': {
-                'max_path_length': 60,
+                'max_path_length': 100,
                 'path_step_reward': 1.0,
-                'pickup_reward': 1.0,
-                'successful_drop_reward': 2.0,
+                'pickup_reward': 3.0,
+                'successful_drop_reward': 3.0,
                 'failed_drop_penalty': -0.0,
                 'empty_bag_reward': 0.00,
-                'step_penalty': -1.0
+                'step_penalty': -6.0
             }
         }
 

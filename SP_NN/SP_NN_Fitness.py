@@ -430,12 +430,7 @@ class NetworkEvolutionFitness:
 
     def calculate_connectivity_score(self) -> float:
         """Calculate network connectivity as a percentage (0-100)"""
-        unreachable = self.network.compute_unreachable_neurons()
-        total_neurons = len(self.network.neurons)
-        if total_neurons == 0:
-            connectivity = 0.0
-        else:
-            connectivity = unreachable
+        connectivity = self.network.compute_unreachable_neurons()
 
         # Update monitor if it exists and change is significant
         try:
@@ -459,6 +454,9 @@ class NetworkEvolutionFitness:
 
         # Clear pickup bag at start of each path
         self.pickup_bag = []
+
+        # **Reset current position to the origin at the start of evaluation**
+        self.current_pos = Position(0.0, 0.0, 0.0)  # Start at origin every time
 
         # Reset path in the monitor
         if self.monitor and self.monitor.visualization_enabled:
@@ -632,7 +630,7 @@ class NetworkEvolutionFitness:
             sys.exit(0)
 
         # Final fitness calculation using configuration parameters
-        fitness = (path_score) * (connectivity_score )
+        fitness = (path_score) + (connectivity_score )
 
         if self.debug:
             print(f"\nFitness Calculation Details:")
