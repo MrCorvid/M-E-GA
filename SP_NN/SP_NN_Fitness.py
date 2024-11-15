@@ -1,6 +1,6 @@
 # network_evolution_fitness.py
 
-from typing import List, Dict, Optional, Callable
+from typing import List, Dict, Optional, Callable, Iterator
 from SP_NN import (
     create_network,
     SpatialNeuralNetwork,
@@ -23,6 +23,137 @@ import numpy as np
 from scipy.spatial import KDTree
 import concurrent.futures
 from threading import Lock, RLock
+
+
+class NavigationSystem:
+    def __init__(self, network_params):
+        self.network_params = network_params
+        self.current_heading = np.array([1.0, 0.0, 0.0], dtype=np.float64)
+        
+        # Command patterns (4-bit identifiers)
+        self.COMMANDS = {
+            0b1111: 'X-HEADING',  # Rotate around X axis
+            0b1110: 'Y-HEADING',  # Rotate around Y axis
+            0b1100: 'Z-HEADING',  # Rotate around Z axis
+            0b1000: 'MOVE',        # Move in current heading direction
+            0b1001: 'DROP'         # Drop carried neuron
+        }
+
+    def stream_genome_to_binary(self, genome: List[int]) -> Iterator[int]:
+        """
+        Convert genome to binary byte stream.
+        Example: genome [1,2,3,4] -> "1234" -> binary representation
+        """
+        # Join digits and convert to integer
+        numeric_str = ''.join(map(str, genome))
+        numeric_value = int(numeric_str)
+        
+        # Convert to binary string and pad to byte alignment
+        binary_str = bin(numeric_value)[2:]  # Remove '0b' prefix
+        padding = (8 - len(binary_str) % 8) % 8
+        binary_str = '0' * padding + binary_str
+        
+        # Yield each byte
+        for i in range(0, len(binary_str), 8):
+            yield int(binary_str[i:i + 8], 2)
+
+    def process_binary_stream(self, binary_stream: Iterator[int]) -> Iterator[Dict]:
+        """Process binary stream into navigation commands."""
+        command_buffer = 0
+        bits_processed = 0
+        current_command = None
+        
+        for byte in binary_stream:
+            for bit_pos in range(7, -1, -1):
+                bit = (byte >> bit_pos) & 1
+                
+                if current_command is None:
+                    # Collect command bits (4 bits)
+                    command_buffer = ((command_buffer << 1) | bit) & 0xF
+                    bits_processed += 1
+                    
+                    if bits_processed == 4:
+                        if command_buffer in self.COMMANDS:
+                            current_command = {
+                                'type': self.COMMANDS[command_buffer],
+                                'magnitude_bits': [],
+                                'selector_read': False
+                            }
+                        command_buffer = 0
+                        bits_processed = 0
+                        
+                else:
+                    if not current_command['selector_read']:
+                        # Read selector bit
+                        current_command['selector'] = bit
+                        current_command['selector_read'] = True
+                        current_command['required_bits'] = 8 if bit else 6
+                    else:
+                        # Collect magnitude bits
+                        current_command['magnitude_bits'].append(bit)
+                        
+                        if len(current_command['magnitude_bits']) == current_command['required_bits']:
+                            magnitude = 0
+                            for mag_bit in current_command['magnitude_bits']:
+                                magnitude = (magnitude << 1) | mag_bit
+                            
+                            yield {
+                                'type': current_command['type'],
+                                'magnitude': magnitude,
+                                'selector': current_command['selector']
+                            }
+                            current_command = None
+
+    def _normalize_angle(self, magnitude: int, selector: int) -> float:
+        """
+        Normalize the angle based on magnitude and selector.
+        For simplicity, assume magnitude is scaled to a maximum of 360 degrees.
+        """
+        max_magnitude = (1 << 8) - 1 if selector else (1 << 6) - 1
+        return (magnitude / max_magnitude) * 360.0
+
+    def _scale_magnitude_to_distance(self, magnitude: int, selector: int) -> float:
+        """
+        Scale the magnitude to a distance value.
+        For simplicity, assume magnitude scales to a maximum of 1 unit.
+        """
+        max_magnitude = (1 << 8) - 1 if selector else (1 << 6) - 1
+        return (magnitude / max_magnitude) * 1.0
+
+    def update_heading(self, axis: str, angle: float):
+        """
+        Update the current heading vector based on rotation around the specified axis.
+        """
+        radians = np.deg2rad(angle)
+        if axis == 'X':
+            rotation_matrix = np.array([
+                [1, 0, 0],
+                [0, np.cos(radians), -np.sin(radians)],
+                [0, np.sin(radians), np.cos(radians)]
+            ])
+        elif axis == 'Y':
+            rotation_matrix = np.array([
+                [np.cos(radians), 0, np.sin(radians)],
+                [0, 1, 0],
+                [-np.sin(radians), 0, np.cos(radians)]
+            ])
+        elif axis == 'Z':
+            rotation_matrix = np.array([
+                [np.cos(radians), -np.sin(radians), 0],
+                [np.sin(radians), np.cos(radians), 0],
+                [0, 0, 1]
+            ])
+        else:
+            rotation_matrix = np.identity(3)
+        
+        self.current_heading = rotation_matrix.dot(self.current_heading)
+        self.current_heading /= np.linalg.norm(self.current_heading)  # Normalize
+
+    def get_movement_vector(self, distance: float) -> np.ndarray:
+        """
+        Get the movement vector based on the current heading and distance.
+        """
+        return self.current_heading * distance
 
 
 class NetworkMonitorWindow:
@@ -387,6 +518,9 @@ class NetworkEvolutionFitness:
         self.pickup_bag = []
         self.current_pos = Position(0.0, 0.0, 0.0)  # Initial position at origin
 
+        # Initialize Navigation System
+        self.navigation_system = NavigationSystem(self.network_params)
+
         # Create monitor window first
         try:
             self.monitor = NetworkMonitorWindow(volume_size=self.network_params.volume_size)
@@ -443,14 +577,33 @@ class NetworkEvolutionFitness:
 
         return connectivity
 
-    def execute_path(self, path: List[str]) -> Dict:
-        """Execute movement path to modify network structure"""
+    def execute_path(self, genome: List[int]) -> Dict:
+        """
+        Execute movement path based on the provided genome using the NavigationSystem.
+
+        Args:
+            genome (List[int]): The genome representing the navigation commands.
+
+        Returns:
+            Dict: A dictionary containing execution metrics.
+        """
         # **Clear existing drops from previous evaluation**
         if self.monitor:
             self.monitor.clear_drops()
 
-        # Use a local set to track processed neurons within this evaluation
-        processed_neurons = set()
+        # Use NavigationSystem to process genome
+        binary_stream = self.navigation_system.stream_genome_to_binary(genome)
+        command_stream = self.navigation_system.process_binary_stream(binary_stream)
+
+        # Reset metrics
+        self.metrics = {
+            'path_distance': 0.0,
+            'pickups': 0,
+            'successful_drops': 0,
+            'failed_drops': 0,
+            'path_score': 0.0,
+            'path_length_reward': 0.0
+        }
 
         # Clear pickup bag at start of each path
         self.pickup_bag = []
@@ -479,42 +632,93 @@ class NetworkEvolutionFitness:
         # Track when we pass the step limit
         step_limit_passed = False
 
-        half_volume = self.network_params.volume_size / 2
+        for command in command_stream:
+            cmd_type = command['type']
+            magnitude = command['magnitude']
+            selector = command['selector']
 
-        for command in path:
-            # Check if we're passing the step limit
-            if total_steps == self.max_path_length:
+            if total_steps >= self.max_path_length:
                 step_limit_passed = True
                 if self.debug:
                     print(f"Step limit {self.max_path_length} passed - subsequent actions cost double")
 
-            if command == 'DR' and self.pickup_bag:
+            if cmd_type.endswith('HEADING'):
+                angle = self.navigation_system._normalize_angle(magnitude, selector)
+                axis = cmd_type[0]  # 'X', 'Y', or 'Z'
+                self.navigation_system.update_heading(axis, angle)
+                if self.debug:
+                    print(f"Rotated around {axis}-axis by {angle:.2f} degrees")
+            elif cmd_type == 'MOVE':
+                distance = self.navigation_system._scale_magnitude_to_distance(magnitude, selector)
+                movement_vector = self.navigation_system.get_movement_vector(distance)
+
+                # Update position with wrapping in toroidal space
+                new_x = (self.current_pos.x + movement_vector[0]) % self.network_params.volume_size
+                new_y = (self.current_pos.y + movement_vector[1]) % self.network_params.volume_size
+                new_z = (self.current_pos.z + movement_vector[2]) % self.network_params.volume_size
+                self.current_pos = Position(new_x, new_y, new_z)
+
+                # Update metrics
+                self.metrics['path_distance'] += distance
+                moves_made += 1
                 total_steps += 1
+
+                if not step_limit_passed:
+                    # Reward for move within limit
+                    path_score += self.path_step_reward
+                else:
+                    # Penalty for move beyond limit
+                    path_score += self.step_penalty
+
+                # Check for pickups at current position
                 current_pos_tuple = (
                     round(self.current_pos.x),
                     round(self.current_pos.y),
                     round(self.current_pos.z)
                 )
 
-                # Check if position is occupied by other neurons
-                is_position_empty = not any(
-                    tuple(round(x) for x in pos['position']) == current_pos_tuple
-                    for nid, pos in neuron_positions.items()
-                    if nid not in self.pickup_bag and nid not in position_updates and nid not in processed_neurons
-                )
+                # Only pick up hidden neurons that have not been processed
+                for nid, data in neuron_positions.items():
+                    neuron = self.network.neurons[nid]
+                    if (
+                            neuron.type == NeuronType.HIDDEN and
+                            nid not in self.pickup_bag and
+                            nid not in position_updates
+                    ):
+                        neuron_pos = tuple(round(x) for x in data['position'])
+                        if neuron_pos == current_pos_tuple:
+                            self.pickup_bag.append(nid)
+                            pickups_made += 1
+                            # Apply pickup reward
+                            if not step_limit_passed:
+                                path_score += self.pickup_reward
+                            else:
+                                path_score += self.step_penalty
+                            if self.debug:
+                                print(f"Picked up neuron {nid} at {current_pos_tuple}")
+                            break
 
-                if is_position_empty:
-                    # Successful drop
+                # Send the new position to the monitor if visualization is enabled
+                if self.monitor and self.monitor.visualization_enabled:
+                    self.monitor.update_path_step(self.current_pos)
+
+                # **Conditional Sleeping Based on Visualization**
+                if self.monitor and self.monitor.visualization_enabled:
+                    time.sleep(0.05)  # Adjust as needed
+
+            elif cmd_type == 'DROP':
+                if self.pickup_bag:
                     neuron_id = self.pickup_bag.pop(0)
-                    position_updates[neuron_id] = current_pos_tuple
+                    position_updates[neuron_id] = (
+                        round(self.current_pos.x),
+                        round(self.current_pos.y),
+                        round(self.current_pos.z)
+                    )
                     neurons_moved += 1
                     successful_drops += 1
 
-                    # Mark neuron as processed
-                    processed_neurons.add(neuron_id)
-
                     # **Send the drop position immediately to the monitor**
-                    drop_pos = Position(*current_pos_tuple)
+                    drop_pos = Position(*position_updates[neuron_id])
                     if self.monitor and self.monitor.visualization_enabled:
                         self.monitor.update_drop_locations([drop_pos])
 
@@ -524,64 +728,32 @@ class NetworkEvolutionFitness:
                     else:
                         # Penalty for successful drop beyond limit
                         path_score += self.failed_drop_penalty
+
+                    if self.debug:
+                        print(f"Dropped neuron {neuron_id} at {position_updates[neuron_id]}")
                 else:
                     # Failed drop
                     failed_drops += 1
                     path_score += self.failed_drop_penalty
-
-            else:
-                # Movement command
-                new_pos = self.move(command)
-                if new_pos:
-                    total_steps += 1
-                    moves_made += 1
-                    self.current_pos = new_pos
-
-                    if not step_limit_passed:
-                        # Reward for move within limit
-                        path_score += self.path_step_reward
-
-                        # Check for pickups at current position
-                        current_pos_tuple = (
-                            round(self.current_pos.x),
-                            round(self.current_pos.y),
-                            round(self.current_pos.z)
-                        )
-
-                        # Only pick up hidden neurons that have not been processed
-                        for nid, data in neuron_positions.items():
-                            neuron = self.network.neurons[nid]
-                            if (
-                                    neuron.type == NeuronType.HIDDEN and
-                                    nid not in self.pickup_bag and
-                                    nid not in position_updates and
-                                    nid not in processed_neurons
-                            ):
-                                neuron_pos = tuple(round(x) for x in data['position'])
-                                if neuron_pos == current_pos_tuple:
-                                    self.pickup_bag.append(nid)
-                                    pickups_made += 1
-                                    # Apply pickup reward
-                                    path_score += self.pickup_reward
-                                    break
-                    else:
-                        # Penalty for move beyond limit
-                        path_score += self.step_penalty
-
-                    # Send the new position to the monitor if visualization is enabled
-                    if self.monitor and self.monitor.visualization_enabled:
-                        self.monitor.update_path_step(self.current_pos)
-
-                else:
                     if self.debug:
-                        print(f"Invalid movement command: {command}")
+                        print("Failed to drop: No neurons to drop")
 
-            # **Conditional Sleeping Based on Visualization**
-            if self.monitor and self.monitor.visualization_enabled:
-                time.sleep(0.05)  # Adjust as needed
+                total_steps += 1
+
+                # **Conditional Sleeping Based on Visualization**
+                if self.monitor and self.monitor.visualization_enabled:
+                    time.sleep(0.05)  # Adjust as needed
 
         if position_updates:
             self.network.update_neuron_positions(position_updates)
+
+        # Update metrics
+        self.metrics.update({
+            'pickups': pickups_made,
+            'successful_drops': successful_drops,
+            'failed_drops': failed_drops,
+            'path_score': path_score
+        })
 
         return {
             'path_score': path_score,
@@ -596,6 +768,43 @@ class NetworkEvolutionFitness:
             'excess_steps': total_steps - self.max_path_length if step_limit_passed else 0
         }
 
+    def process_genome(self, genome: List[int]) -> float:
+        """
+        Process the genome by executing the path, calculating connectivity, and computing fitness.
+
+        Args:
+            genome (List[int]): The genome representing the navigation commands.
+
+        Returns:
+            float: The calculated fitness score.
+        """
+        # Reset metrics for this run
+        self.metrics = {
+            'path_distance': 0.0,
+            'pickups': 0,
+            'successful_drops': 0,
+            'failed_drops': 0,
+            'path_score': 0.0,
+            'path_length_reward': 0.0
+        }
+
+        # Execute path and get results
+        movement_results = self.execute_path(genome)
+
+        # After network updates are complete, calculate final connectivity
+        connectivity_score = self.calculate_connectivity_score()
+
+        # Update monitor with final state
+        if self.monitor and hasattr(self.monitor, 'visualization_enabled'):
+            if self.monitor.visualization_enabled:
+                current_state = self.network.get_network_state()
+                self.monitor.update_neuron_positions(current_state['neuron_positions'])
+
+        # Calculate final fitness
+        fitness = movement_results['path_score'] + connectivity_score
+
+        return fitness
+
     def compute(self, encoded_individual, ga_instance) -> float:
         """
         Phase 1 fitness computation with network visualization at 100% connectivity.
@@ -609,15 +818,10 @@ class NetworkEvolutionFitness:
         """
         # Decode and execute path
         path = ga_instance.decode_organism(encoded_individual) if ga_instance else encoded_individual
-        movement_results = self.execute_path(path)
-
-        # Get raw path score from execution
-        path_score = movement_results['path_score']
-
-        # Calculate connectivity percentage (0-100)
-        connectivity_score = int(self.calculate_connectivity_score())
+        fitness = self.process_genome(path)
 
         # Check if we've achieved 100% connectivity
+        connectivity_score = int(self.calculate_connectivity_score())
         if connectivity_score == 100:
             if self.debug:
                 print("\nExiting Phase 1: Achieved 100% network connectivity")
@@ -630,14 +834,14 @@ class NetworkEvolutionFitness:
             sys.exit(0)
 
         # Final fitness calculation using configuration parameters
-        fitness = (path_score) + (connectivity_score )
+        fitness = fitness + connectivity_score
 
         if self.debug:
             print(f"\nFitness Calculation Details:")
             print(f"Path Length: {movement_results['total_steps']}")
             print(f"Successful Drops: {movement_results['neurons_moved']}")
             print(f"Failed Drops: {movement_results['failed_drops']}")
-            print(f"Raw Path Score: {path_score:.2f}")
+            print(f"Raw Path Score: {movement_results['path_score']:.2f}")
             print(f"Connectivity Score: {connectivity_score}%")
             print(f"Combined Fitness: {fitness:.2f}")
 
@@ -645,33 +849,6 @@ class NetworkEvolutionFitness:
             self.update_best(encoded_individual, fitness)
 
         return fitness
-
-    def move(self, direction: str) -> Optional[Position]:
-        """Calculate new position after movement"""
-        moves = {
-            'U': (0, 0, 1),  # Up along Z-axis
-            'D': (0, 0, -1),  # Down along Z-axis
-            'F': (1, 0, 0),  # Forward along X-axis
-            'B': (-1, 0, 0),  # Backward along X-axis
-            'L': (0, 1, 0),  # Left along Y-axis
-            'R': (0, -1, 0)  # Right along Y-axis
-            # You can add more directions here for full 3D movement
-        }
-
-        if direction in moves:
-            dx, dy, dz = moves[direction]
-            half_volume = self.network_params.volume_size / 2
-            new_x = self.current_pos.x + dx
-            new_y = self.current_pos.y + dy
-            new_z = self.current_pos.z + dz
-
-            # Apply wrapping with centered volume
-            new_x = ((new_x + half_volume) % self.network_params.volume_size) - half_volume
-            new_y = ((new_y + half_volume) % self.network_params.volume_size) - half_volume
-            new_z = ((new_z + half_volume) % self.network_params.volume_size) - half_volume
-
-            return Position(float(new_x), float(new_y), float(new_z))
-        return None
 
     def get_stats(self) -> Dict:
         """Get current statistics"""
