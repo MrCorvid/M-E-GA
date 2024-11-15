@@ -578,196 +578,209 @@ class NetworkEvolutionFitness:
         return connectivity
 
     def execute_path(self, genome: List[int]) -> Dict:
-        """
-        Execute movement path based on the provided genome using the NavigationSystem.
+    """
+    Execute movement path based on the provided genome using the NavigationSystem.
 
-        Args:
-            genome (List[int]): The genome representing the navigation commands.
+    Args:
+        genome (List[int]): The genome representing the navigation commands.
 
-        Returns:
-            Dict: A dictionary containing execution metrics.
-        """
-        # **Clear existing drops from previous evaluation**
-        if self.monitor:
-            self.monitor.clear_drops()
+    Returns:
+        Dict: A dictionary containing execution metrics.
+    """
+    # Clear existing drops from previous evaluation
+    if self.monitor:
+        self.monitor.clear_drops()
 
-        # Use NavigationSystem to process genome
-        binary_stream = self.navigation_system.stream_genome_to_binary(genome)
-        command_stream = self.navigation_system.process_binary_stream(binary_stream)
+    # Agent radius for neuron pickup
+    self.agent_radius = 1.5  # Adjust this value as needed
 
-        # Reset metrics
-        self.metrics = {
-            'path_distance': 0.0,
-            'pickups': 0,
-            'successful_drops': 0,
-            'failed_drops': 0,
-            'path_score': 0.0,
-            'path_length_reward': 0.0
-        }
+    # Use NavigationSystem to process genome
+    binary_stream = self.navigation_system.stream_genome_to_binary(genome)
+    command_stream = self.navigation_system.process_binary_stream(binary_stream)
 
-        # Clear pickup bag at start of each path
-        self.pickup_bag = []
+    # Reset metrics
+    self.metrics = {
+        'path_distance': 0.0,
+        'pickups': 0,
+        'successful_drops': 0,
+        'failed_drops': 0,
+        'path_score': 0.0,
+        'path_length_reward': 0.0
+    }
 
-        # **Reset current position to the origin at the start of evaluation**
-        self.current_pos = Position(0.0, 0.0, 0.0)  # Start at origin every time
+    # Clear pickup bag at start of each path
+    self.pickup_bag = []
 
-        # Reset path in the monitor
-        if self.monitor and self.monitor.visualization_enabled:
-            self.monitor.path_steps = []
-            self.monitor.update_path_step(self.current_pos)
+    # Reset current position to the origin at start of evaluation
+    self.current_pos = Position(0.0, 0.0, 0.0)
 
-        state = self.network.get_network_state()
-        neuron_positions = state['neuron_positions']
-        position_updates = {}
+    # Reset path in the monitor
+    if self.monitor and self.monitor.visualization_enabled:
+        self.monitor.path_steps = []
+        self.monitor.update_path_step(self.current_pos)
 
-        # Tracking metrics
-        moves_made = 0
-        pickups_made = 0
-        successful_drops = 0
-        failed_drops = 0
-        neurons_moved = 0
-        total_steps = 0
-        path_score = 0.0
+    state = self.network.get_network_state()
+    neuron_positions = state['neuron_positions']
+    position_updates = {}
 
-        # Track when we pass the step limit
-        step_limit_passed = False
+    # Tracking metrics
+    moves_made = 0
+    pickups_made = 0
+    successful_drops = 0
+    failed_drops = 0
+    neurons_moved = 0
+    total_steps = 0
+    path_score = 0.0
 
-        for command in command_stream:
-            cmd_type = command['type']
-            magnitude = command['magnitude']
-            selector = command['selector']
+    # Track when we pass the step limit
+    step_limit_passed = False
 
-            if total_steps >= self.max_path_length:
-                step_limit_passed = True
-                if self.debug:
-                    print(f"Step limit {self.max_path_length} passed - subsequent actions cost double")
+    for command in command_stream:
+        cmd_type = command['type']
+        magnitude = command['magnitude']
+        selector = command['selector']
 
-            if cmd_type.endswith('HEADING'):
-                angle = self.navigation_system._normalize_angle(magnitude, selector)
-                axis = cmd_type[0]  # 'X', 'Y', or 'Z'
-                self.navigation_system.update_heading(axis, angle)
-                if self.debug:
-                    print(f"Rotated around {axis}-axis by {angle:.2f} degrees")
-            elif cmd_type == 'MOVE':
-                distance = self.navigation_system._scale_magnitude_to_distance(magnitude, selector)
-                movement_vector = self.navigation_system.get_movement_vector(distance)
+        if total_steps >= self.max_path_length:
+            step_limit_passed = True
+            if self.debug:
+                print(f"Step limit {self.max_path_length} passed - subsequent actions cost double")
 
-                # Update position with wrapping in toroidal space
-                new_x = (self.current_pos.x + movement_vector[0]) % self.network_params.volume_size
-                new_y = (self.current_pos.y + movement_vector[1]) % self.network_params.volume_size
-                new_z = (self.current_pos.z + movement_vector[2]) % self.network_params.volume_size
-                self.current_pos = Position(new_x, new_y, new_z)
+        if cmd_type.endswith('HEADING'):
+            angle = self.navigation_system._normalize_angle(magnitude, selector)
+            axis = cmd_type[0]  # 'X', 'Y', or 'Z'
+            self.navigation_system.update_heading(axis, angle)
+            if self.debug:
+                print(f"Rotated around {axis}-axis by {angle:.2f} degrees")
 
-                # Update metrics
-                self.metrics['path_distance'] += distance
-                moves_made += 1
-                total_steps += 1
+        elif cmd_type == 'MOVE':
+            distance = self.navigation_system._scale_magnitude_to_distance(magnitude, selector)
+            movement_vector = self.navigation_system.get_movement_vector(distance)
+
+            # Update position with wrapping in toroidal space
+            new_x = (self.current_pos.x + movement_vector[0]) % self.network_params.volume_size
+            new_y = (self.current_pos.y + movement_vector[1]) % self.network_params.volume_size
+            new_z = (self.current_pos.z + movement_vector[2]) % self.network_params.volume_size
+            self.current_pos = Position(new_x, new_y, new_z)
+
+            # Update metrics
+            self.metrics['path_distance'] += distance
+            moves_made += 1
+            total_steps += 1
+
+            if not step_limit_passed:
+                # Reward for move within limit
+                path_score += self.path_step_reward
+            else:
+                # Penalty for move beyond limit
+                path_score += self.step_penalty
+
+            # Check for pickups at current position
+            for nid, data in neuron_positions.items():
+                neuron = self.network.neurons[nid]
+                if (
+                    neuron.type == NeuronType.HIDDEN and
+                    nid not in self.pickup_bag and
+                    nid not in position_updates
+                ):
+                    # Calculate actual distance between agent and neuron
+                    dx = self.current_pos.x - data['position'][0]
+                    dy = self.current_pos.y - data['position'][1]
+                    dz = self.current_pos.z - data['position'][2]
+                    
+                    # Calculate distance in toroidal space
+                    dx = min(abs(dx), abs(dx - self.network_params.volume_size), abs(dx + self.network_params.volume_size))
+                    dy = min(abs(dy), abs(dy - self.network_params.volume_size), abs(dy + self.network_params.volume_size))
+                    dz = min(abs(dz), abs(dz - self.network_params.volume_size), abs(dz + self.network_params.volume_size))
+                    
+                    distance = np.sqrt(dx*dx + dy*dy + dz*dz)
+                    
+                    if distance <= self.agent_radius:
+                        self.pickup_bag.append(nid)
+                        pickups_made += 1
+                        # Apply pickup reward
+                        if not step_limit_passed:
+                            path_score += self.pickup_reward
+                        else:
+                            path_score += self.step_penalty
+                        if self.debug:
+                            print(f"Picked up neuron {nid} at position {self.current_pos}")
+                        break
+
+            # Send the new position to the monitor if visualization is enabled
+            if self.monitor and self.monitor.visualization_enabled:
+                self.monitor.update_path_step(self.current_pos)
+
+            # Conditional sleeping based on visualization
+            if self.monitor and self.monitor.visualization_enabled:
+                time.sleep(0.05)  # Adjust as needed
+
+        elif cmd_type == 'DROP':
+            if self.pickup_bag:
+                neuron_id = self.pickup_bag.pop(0)
+                
+                # Calculate drop position at back edge of agent's radius
+                # Get the opposite of current heading for back edge
+                drop_heading = -self.navigation_system.current_heading
+                
+                # Calculate drop position by moving agent_radius distance in opposite heading
+                drop_x = (self.current_pos.x + (drop_heading[0] * self.agent_radius)) % self.network_params.volume_size
+                drop_y = (self.current_pos.y + (drop_heading[1] * self.agent_radius)) % self.network_params.volume_size
+                drop_z = (self.current_pos.z + (drop_heading[2] * self.agent_radius)) % self.network_params.volume_size
+                
+                position_updates[neuron_id] = (drop_x, drop_y, drop_z)
+                neurons_moved += 1
+                successful_drops += 1
+
+                # Send the drop position immediately to the monitor
+                drop_pos = Position(drop_x, drop_y, drop_z)
+                if self.monitor and self.monitor.visualization_enabled:
+                    self.monitor.update_drop_locations([drop_pos])
 
                 if not step_limit_passed:
-                    # Reward for move within limit
-                    path_score += self.path_step_reward
+                    # Reward for successful drop within limit
+                    path_score += self.successful_drop_reward
                 else:
-                    # Penalty for move beyond limit
-                    path_score += self.step_penalty
-
-                # Check for pickups at current position
-                current_pos_tuple = (
-                    round(self.current_pos.x),
-                    round(self.current_pos.y),
-                    round(self.current_pos.z)
-                )
-
-                # Only pick up hidden neurons that have not been processed
-                for nid, data in neuron_positions.items():
-                    neuron = self.network.neurons[nid]
-                    if (
-                            neuron.type == NeuronType.HIDDEN and
-                            nid not in self.pickup_bag and
-                            nid not in position_updates
-                    ):
-                        neuron_pos = tuple(round(x) for x in data['position'])
-                        if neuron_pos == current_pos_tuple:
-                            self.pickup_bag.append(nid)
-                            pickups_made += 1
-                            # Apply pickup reward
-                            if not step_limit_passed:
-                                path_score += self.pickup_reward
-                            else:
-                                path_score += self.step_penalty
-                            if self.debug:
-                                print(f"Picked up neuron {nid} at {current_pos_tuple}")
-                            break
-
-                # Send the new position to the monitor if visualization is enabled
-                if self.monitor and self.monitor.visualization_enabled:
-                    self.monitor.update_path_step(self.current_pos)
-
-                # **Conditional Sleeping Based on Visualization**
-                if self.monitor and self.monitor.visualization_enabled:
-                    time.sleep(0.05)  # Adjust as needed
-
-            elif cmd_type == 'DROP':
-                if self.pickup_bag:
-                    neuron_id = self.pickup_bag.pop(0)
-                    position_updates[neuron_id] = (
-                        round(self.current_pos.x),
-                        round(self.current_pos.y),
-                        round(self.current_pos.z)
-                    )
-                    neurons_moved += 1
-                    successful_drops += 1
-
-                    # **Send the drop position immediately to the monitor**
-                    drop_pos = Position(*position_updates[neuron_id])
-                    if self.monitor and self.monitor.visualization_enabled:
-                        self.monitor.update_drop_locations([drop_pos])
-
-                    if not step_limit_passed:
-                        # Reward for successful drop within limit
-                        path_score += self.successful_drop_reward
-                    else:
-                        # Penalty for successful drop beyond limit
-                        path_score += self.failed_drop_penalty
-
-                    if self.debug:
-                        print(f"Dropped neuron {neuron_id} at {position_updates[neuron_id]}")
-                else:
-                    # Failed drop
-                    failed_drops += 1
+                    # Penalty for successful drop beyond limit
                     path_score += self.failed_drop_penalty
-                    if self.debug:
-                        print("Failed to drop: No neurons to drop")
 
-                total_steps += 1
+                if self.debug:
+                    print(f"Dropped neuron {neuron_id} at {position_updates[neuron_id]}")
+            else:
+                # Failed drop
+                failed_drops += 1
+                path_score += self.failed_drop_penalty
+                if self.debug:
+                    print("Failed to drop: No neurons to drop")
 
-                # **Conditional Sleeping Based on Visualization**
-                if self.monitor and self.monitor.visualization_enabled:
-                    time.sleep(0.05)  # Adjust as needed
+            total_steps += 1
 
-        if position_updates:
-            self.network.update_neuron_positions(position_updates)
+            # Conditional sleeping based on visualization
+            if self.monitor and self.monitor.visualization_enabled:
+                time.sleep(0.05)  # Adjust as needed
 
-        # Update metrics
-        self.metrics.update({
-            'pickups': pickups_made,
-            'successful_drops': successful_drops,
-            'failed_drops': failed_drops,
-            'path_score': path_score
-        })
+    if position_updates:
+        self.network.update_neuron_positions(position_updates)
 
-        return {
-            'path_score': path_score,
-            'moves_made': moves_made,
-            'pickups_made': pickups_made,
-            'successful_drops': successful_drops,
-            'failed_drops': failed_drops,
-            'neurons_moved': neurons_moved,
-            'total_neurons': len(self.network.neurons),
-            'pickup_bag_size': len(self.pickup_bag),
-            'total_steps': total_steps,
-            'excess_steps': total_steps - self.max_path_length if step_limit_passed else 0
-        }
+    # Update metrics
+    self.metrics.update({
+        'pickups': pickups_made,
+        'successful_drops': successful_drops,
+        'failed_drops': failed_drops,
+        'path_score': path_score
+    })
 
+    return {
+        'path_score': path_score,
+        'moves_made': moves_made,
+        'pickups_made': pickups_made,
+        'successful_drops': successful_drops,
+        'failed_drops': failed_drops,
+        'neurons_moved': neurons_moved,
+        'total_neurons': len(self.network.neurons),
+        'pickup_bag_size': len(self.pickup_bag),
+        'total_steps': total_steps,
+        'excess_steps': total_steps - self.max_path_length if step_limit_passed else 0
+    }
     def process_genome(self, genome: List[int]) -> float:
         """
         Process the genome by executing the path, calculating connectivity, and computing fitness.
