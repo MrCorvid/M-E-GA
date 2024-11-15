@@ -653,9 +653,6 @@ class NetworkEvolutionFitness:
             activation_threshold=network_params.get('activation_threshold', 0.5)
         )
 
-        # Initialize the spatial neural network with the defined parameters
-        self.network = create_network(self.network_params)
-
         # Initialize path reward parameters
         self.pickup_reward = config.get('pickup_reward', 0.5)
         self.successful_drop_reward = config.get('successful_drop_reward', 5.0)
@@ -663,16 +660,15 @@ class NetworkEvolutionFitness:
         self.max_path_length = config.get('max_path_length', 1000.0)
         self.path_length_factor = config.get('path_length_factor', 0.01)
 
+        # Initialize the spatial neural network
+        self.network = create_network(self.network_params)
+        
         # Initialize navigation system
         self.navigation = NavigationSystem(self.network_params)
-
-        # Debug and Update Function
-        self.debug = debug
-        self.update_best = update_best_func
-
+        
         # Initialize state variables
         self.current_pos = Position(0.0, 0.0, 0.0)
-        self.pickup_bag = []  # FIFO queue for picked-up neurons
+        self.pickup_bag = []
         self.metrics = {
             'path_distance': 0.0,
             'pickups': 0,
@@ -684,8 +680,12 @@ class NetworkEvolutionFitness:
         self.position_updates = {}
         self.processed_neurons = set()
         self.agent_radius = 0.5
-
-        # Create monitor window
+        
+        # Debug and Update Function
+        self.debug = debug
+        self.update_best = update_best_func
+        
+        # Initialize monitor
         try:
             self.monitor = NetworkMonitorWindow(volume_size=self.network_params.volume_size)
             time.sleep(0.5)
@@ -698,113 +698,9 @@ class NetworkEvolutionFitness:
 
         # Initialize last connectivity score
         self._last_connectivity = 0
-
+        
         # Start the background monitor update thread
         self._start_background_updates()
-
-    def _start_background_updates(self, update_interval: float = 1.0):
-        """Start a background thread to continuously update the monitor window."""
-
-        def update_loop():
-            while True:
-                try:
-                    current_state = self.network.get_network_state()
-                    if self.monitor and hasattr(self.monitor, 'visualization_enabled'):
-                        if self.monitor.visualization_enabled:
-                            self.monitor.update_neuron_positions(current_state['neuron_positions'])
-                except Exception as e:
-                    if self.debug:
-                        print(f"Error in background update loop: {e}")
-                time.sleep(update_interval)
-
-        update_thread = threading.Thread(target=update_loop, daemon=True)
-        update_thread.start()
-
-    def check_for_pickups(self, neuron_positions):
-        """Check for pickups at current position - collects all valid neurons within range"""
-        current_pos_tuple = (
-            round(self.current_pos.x),
-            round(self.current_pos.y),
-            round(self.current_pos.z)
-        )
-
-        for nid, data in neuron_positions.items():
-            neuron = self.network.neurons[nid]
-            if (
-                    neuron.type == NeuronType.HIDDEN and
-                    nid not in self.pickup_bag and
-                    nid not in self.position_updates and
-                    nid not in self.processed_neurons
-            ):
-                neuron_pos = tuple(round(x) for x in data['position'])
-                if self.positions_overlap(neuron_pos, current_pos_tuple):
-                    # Add to pickup bag (FIFO queue)
-                    self.pickup_bag.append(nid)
-                    self.metrics['pickups'] += 1
-                    self.metrics['path_score'] += self.pickup_reward
-
-                    if self.debug:
-                        print(f"[PICKUP] Neuron {nid} at {neuron_pos}, Bag size: {len(self.pickup_bag)}")
-
-    def attempt_drop(self, neuron_positions):
-        """Attempt to drop the oldest picked up neuron (FIFO order)"""
-        if not self.pickup_bag:
-            return
-
-        drop_pos = self.calculate_drop_position()
-        pos_tuple = (round(drop_pos.x), round(drop_pos.y), round(drop_pos.z))
-
-        # Check if position is clear
-        is_clear = not any(
-            self.positions_overlap(pos_tuple, tuple(round(x) for x in pos['position']))
-            for nid, pos in neuron_positions.items()
-            if nid not in self.pickup_bag and nid not in self.position_updates
-        )
-
-        if is_clear:
-            neuron_id = self.pickup_bag.pop(0)  # FIFO - drop oldest neuron
-            self.position_updates[neuron_id] = pos_tuple
-            self.processed_neurons.add(neuron_id)
-            self.metrics['successful_drops'] += 1
-            self.metrics['path_score'] += self.successful_drop_reward
-
-            if self.debug:
-                print(f"[DROP] Success - Neuron {neuron_id} at {pos_tuple}, Remaining: {len(self.pickup_bag)}")
-
-            # Visualization update
-            if self.monitor and hasattr(self.monitor, 'visualization_enabled'):
-                if self.monitor.visualization_enabled:
-                    self.monitor.update_drop_locations([Position(*pos_tuple)])
-                    time.sleep(0.05)
-        else:
-            self.metrics['failed_drops'] += 1
-            self.metrics['path_score'] += self.failed_drop_penalty
-
-            if self.debug:
-                print(f"[DROP] Failed at {pos_tuple}, Bag size: {len(self.pickup_bag)}")
-
-    def positions_overlap(self, pos1: tuple, pos2: tuple) -> bool:
-        """Check if two positions overlap considering agent radius"""
-        dx = abs(pos1[0] - pos2[0])
-        dy = abs(pos1[1] - pos2[1])
-        dz = abs(pos1[2] - pos2[2])
-
-        # Adjust for wrapping
-        volume_size = self.network_params.volume_size
-        dx = min(dx, volume_size - dx)
-        dy = min(dy, volume_size - dy)
-        dz = min(dz, volume_size - dz)
-
-        distance = np.sqrt(dx * dx + dy * dy + dz * dz)
-        return distance <= self.agent_radius
-
-    def calculate_drop_position(self) -> Position:
-        """Calculate drop position based on current position"""
-        return Position(
-            round(self.current_pos.x),
-            round(self.current_pos.y),
-            round(self.current_pos.z)
-        )
 
     def calculate_connectivity_score(self) -> float:
         """Calculate network connectivity as a percentage (0-100)"""
@@ -814,7 +710,7 @@ class NetworkEvolutionFitness:
         if total_neurons == 0:
             connectivity = 0.0
         else:
-            connectivity =  unreachable_percentage
+            connectivity = unreachable_percentage
 
         try:
             if self.monitor and abs(connectivity - self._last_connectivity) > 1:
@@ -876,8 +772,6 @@ class NetworkEvolutionFitness:
                 if self.debug:
                     print(f"[NAV] Moving distance: {distance:.2f}")
 
-                start_pos = (self.current_pos.x, self.current_pos.y, self.current_pos.z)
-
                 # Update position with wrapping
                 self.current_pos = Position(
                     (self.current_pos.x + self.navigation.current_heading[
@@ -903,10 +797,12 @@ class NetworkEvolutionFitness:
                     print(f"[DROP] Attempting drop with {len(self.pickup_bag)} neurons in bag")
                 self.attempt_drop(neuron_positions)
 
-        # Apply network updates and calculate fitness
+        # Apply all network updates after path completion
         if self.position_updates:
             self.network.update_neuron_positions(self.position_updates)
+            self.network.update_connections()  # Ensure connections are updated
 
+        # Calculate connectivity score after network updates
         connectivity_score = self.calculate_connectivity_score()
 
         # Calculate path length reward/penalty
@@ -921,7 +817,7 @@ class NetworkEvolutionFitness:
         # Update metrics
         self.metrics['path_length_reward'] = path_length_reward
 
-        # Final fitness calculation
+        # Final fitness calculation with updated connectivity
         final_fitness = self.metrics['path_score'] + (connectivity_score * 4) + path_length_reward
 
         if connectivity_score == 100:
