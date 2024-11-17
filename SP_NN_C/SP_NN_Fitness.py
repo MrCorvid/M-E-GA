@@ -20,74 +20,98 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from dataclasses import dataclass
 from collections import defaultdict, deque
 from enum import Enum
+import itertools
 
 
 class NavigationSystem:
+    """
+    Navigation system for precise movement in discrete 3D space.
+
+    The system processes a genome sequence into movement commands using a structured
+    binary format. Each command consists of:
+    - Command type (4 bits)
+    - Selector bit (1 bit)
+    - Magnitude (6 or 8 bits, based on selector)
+    """
+
     def __init__(self, network_params):
+        """
+        Initialize navigation system.
+
+        Args:
+            network_params: Configuration parameters including volume_size
+        """
         self.network_params = network_params
-        self.current_heading = [1.0, 0.0, 0.0]  # Initial heading along X-axis
+        self.current_heading = np.array([1.0, 0.0, 0.0], dtype=np.float64)
+
+        # Command patterns (4-bit identifiers)
+        self.COMMANDS = {
+            0b1111: 'X-HEADING',  # Rotate around X axis
+            0b1110: 'Y-HEADING',  # Rotate around Y axis
+            0b1100: 'Z-HEADING',  # Rotate around Z axis
+            0b1000: 'MOVE',  # Move in current heading direction
+            0b1001: 'DROP'  # Drop carried neuron
+        }
 
     def stream_genome_to_binary(self, genome: List[int]) -> Iterator[int]:
-        """Stream genome integers to binary bits"""
-        buffer = 0
-        bits_in_buffer = 0
+        """
+        Convert genome to binary byte stream.
 
-        for digit in genome:
-            # Add digit to buffer (4 bits per decimal digit)
-            buffer = (buffer << 4) | (digit & 0xF)
-            bits_in_buffer += 4
+        Args:
+            genome: List of integers (0-9)
 
-            # Stream out complete bytes
-            while bits_in_buffer >= 8:
-                yield (buffer >> (bits_in_buffer - 8)) & 0xFF
-                bits_in_buffer -= 8
+        Yields:
+            Sequence of bytes (0-255) representing the genome
+        """
+        # Join digits and convert to integer
+        numeric_str = ''.join(map(str, genome))
+        numeric_value = int(numeric_str)
 
-        # Handle remaining bits
-        if bits_in_buffer > 0:
-            yield (buffer << (8 - bits_in_buffer)) & 0xFF
+        # Convert to binary string and pad to byte alignment
+        binary_str = bin(numeric_value)[2:]
+        padding = (8 - len(binary_str) % 8) % 8
+        binary_str = '0' * padding + binary_str
+
+        # Yield each byte
+        for i in range(0, len(binary_str), 8):
+            yield int(binary_str[i:i + 8], 2)
 
     def process_binary_stream(self, binary_stream: Iterator[int]) -> Iterator[Dict]:
         """
         Process binary stream into navigation commands.
-        Each command structure: [COMMAND(4)][SELECTOR(1)][MAGNITUDE(6/8)]
+
+        Args:
+            binary_stream: Iterator yielding bytes (0-255)
+
+        Yields:
+            Dict containing command type, magnitude, and selector
         """
         command_buffer = 0
         bits_processed = 0
         current_command = None
-
-        COMMANDS = {
-            0b1111: 'X-HEADING',
-            0b1110: 'Y-HEADING',
-            0b1100: 'Z-HEADING',
-            0b1000: 'MOVE',
-            0b1001: 'DROP'
-        }
 
         for byte in binary_stream:
             for bit_pos in range(7, -1, -1):
                 bit = (byte >> bit_pos) & 1
 
                 if current_command is None:
-                    # Building command pattern
+                    # Collect command bits (4 bits)
                     command_buffer = ((command_buffer << 1) | bit) & 0xF
                     bits_processed += 1
 
-                    # Check for valid command after collecting 4 bits
-                    if bits_processed == 4 and command_buffer in COMMANDS:
-                        current_command = {
-                            'type': COMMANDS[command_buffer],
-                            'magnitude_bits': [],
-                            'selector_read': False
-                        }
-                        command_buffer = 0
-                        bits_processed = 0
-                    elif bits_processed == 4:
+                    if bits_processed == 4:
+                        if command_buffer in self.COMMANDS:
+                            current_command = {
+                                'type': self.COMMANDS[command_buffer],
+                                'magnitude_bits': [],
+                                'selector_read': False
+                            }
                         command_buffer = 0
                         bits_processed = 0
 
                 else:
-                    # Handle selector bit first
                     if not current_command['selector_read']:
+                        # Read selector bit
                         current_command['selector'] = bit
                         current_command['selector_read'] = True
                         current_command['required_bits'] = 8 if bit else 6
@@ -96,20 +120,19 @@ class NavigationSystem:
                         current_command['magnitude_bits'].append(bit)
 
                         if len(current_command['magnitude_bits']) == current_command['required_bits']:
+                            # Convert magnitude bits to value
                             magnitude = 0
                             for mag_bit in current_command['magnitude_bits']:
                                 magnitude = (magnitude << 1) | mag_bit
 
-                            final_command = {
+                            yield {
                                 'type': current_command['type'],
                                 'magnitude': magnitude,
                                 'selector': current_command['selector']
                             }
-
-                            yield final_command
                             current_command = None
 
-        # Handle final command if exists and has minimum bits
+        # Handle final command if complete
         if current_command and current_command.get('selector_read'):
             if len(current_command['magnitude_bits']) >= current_command['required_bits']:
                 magnitude = 0
@@ -123,39 +146,82 @@ class NavigationSystem:
                 }
 
     def _scale_magnitude_to_distance(self, magnitude: int, selector: int) -> float:
-        """Scale magnitude to movement distance based on selector bit."""
-        max_value = 255 if selector else 63
+        """
+        Scale magnitude to movement distance.
+
+        Args:
+            magnitude: Raw magnitude value
+            selector: Selector bit (0=6-bit, 1=8-bit magnitude)
+
+        Returns:
+            Scaled distance value
+        """
+        max_value = 255 if selector else 63  # 8 or 6 bits
         max_distance = self.network_params.volume_size / 4
         return (magnitude / max_value) * max_distance
 
     def _normalize_angle(self, magnitude: int, selector: int) -> float:
-        """Convert magnitude to angle based on selector bit."""
-        max_value = 255 if selector else 63
+        """
+        Convert magnitude to rotation angle.
+
+        Args:
+            magnitude: Raw magnitude value
+            selector: Selector bit (0=6-bit, 1=8-bit magnitude)
+
+        Returns:
+            Angle in degrees (0-360)
+        """
+        max_value = 255 if selector else 63  # 8 or 6 bits
         return (magnitude / max_value) * 360.0
 
     def update_heading(self, axis: str, angle_deg: float):
-        """Update heading based on axis rotation."""
-        angle_rad = np.deg2rad(angle_deg)
-        if axis == 'X':
-            rotation_matrix = np.array([
-                [1, 0, 0],
-                [0, np.cos(angle_rad), -np.sin(angle_rad)],
-                [0, np.sin(angle_rad), np.cos(angle_rad)]
-            ])
-        elif axis == 'Y':
-            rotation_matrix = np.array([
-                [np.cos(angle_rad), 0, np.sin(angle_rad)],
-                [0, 1, 0],
-                [-np.sin(angle_rad), 0, np.cos(angle_rad)]
-            ])
-        else:  # Z-axis
-            rotation_matrix = np.array([
-                [np.cos(angle_rad), -np.sin(angle_rad), 0],
-                [np.sin(angle_rad), np.cos(angle_rad), 0],
-                [0, 0, 1]
-            ])
+        """
+        Update heading vector with rotation.
 
-        self.current_heading = np.dot(rotation_matrix, self.current_heading).tolist()
+        Args:
+            axis: Rotation axis ('X', 'Y', or 'Z')
+            angle_deg: Rotation angle in degrees
+        """
+        angle_rad = np.deg2rad(angle_deg)
+        c, s = np.cos(angle_rad), np.sin(angle_rad)
+
+        # Create rotation matrix based on axis
+        if axis == 'X':
+            rotation = np.array([
+                [1, 0, 0],
+                [0, c, -s],
+                [0, s, c]
+            ], dtype=np.float64)
+        elif axis == 'Y':
+            rotation = np.array([
+                [c, 0, s],
+                [0, 1, 0],
+                [-s, 0, c]
+            ], dtype=np.float64)
+        else:  # Z-axis
+            rotation = np.array([
+                [c, -s, 0],
+                [s, c, 0],
+                [0, 0, 1]
+            ], dtype=np.float64)
+
+        # Apply rotation and normalize
+        self.current_heading = np.dot(rotation, self.current_heading)
+        norm = np.linalg.norm(self.current_heading)
+        if norm > 0:
+            self.current_heading /= norm
+
+    def get_movement_vector(self, distance: float) -> np.ndarray:
+        """
+        Get movement vector for given distance.
+
+        Args:
+            distance: Distance to move
+
+        Returns:
+            3D vector representing movement
+        """
+        return self.current_heading * distance
 
 
 class NetworkMonitorWindow:
@@ -427,8 +493,18 @@ class NetworkMonitorWindow:
                 else:
                     colors.append('gray')
 
-            self.neuron_scatter._offsets3d = (xs, ys, zs)
-            self.neuron_scatter.set_color(colors)
+            # Remove the existing scatter plot
+            self.neuron_scatter.remove()
+
+            # Create a new scatter plot with updated data
+            self.neuron_scatter = self.ax.scatter(
+                xs, ys, zs, c=colors, cmap='viridis', marker='o', s=20, label='Neurons'
+            )
+
+            # Re-add the legend to include the new scatter plot
+            self.ax.legend(loc='upper right')
+
+            # Redraw the canvas
             self.canvas.draw_idle()
 
         except Exception as e:
@@ -547,16 +623,14 @@ class NetworkMonitorWindow:
         except:
             pass
 
+
 class NetworkEvolutionFitness:
     def __init__(
             self,
             config: Dict[str, any],
             update_best_func: Optional[Callable[[any, float], None]] = None,
-            debug: bool = False
+            debug: bool = True
     ):
-        """
-        Initialize the fitness evaluation focusing on network connectivity structure.
-        """
         # Extract network parameters from config
         network_params = config.get('network_params', {})
 
@@ -579,21 +653,19 @@ class NetworkEvolutionFitness:
             activation_threshold=network_params.get('activation_threshold', 0.5)
         )
 
-        # Initialize the spatial neural network with the defined parameters
-        self.network = create_network(self.network_params)
-
         # Initialize path reward parameters
         self.pickup_reward = config.get('pickup_reward', 0.5)
         self.successful_drop_reward = config.get('successful_drop_reward', 5.0)
         self.failed_drop_penalty = config.get('failed_drop_penalty', -0.0)
+        self.max_path_length = config.get('max_path_length', 1000.0)
+        self.path_length_factor = config.get('path_length_factor', 0.01)
 
+        # Initialize the spatial neural network
+        self.network = create_network(self.network_params)
+        
         # Initialize navigation system
         self.navigation = NavigationSystem(self.network_params)
-
-        # Debug and Update Function
-        self.debug = debug
-        self.update_best = update_best_func
-
+        
         # Initialize state variables
         self.current_pos = Position(0.0, 0.0, 0.0)
         self.pickup_bag = []
@@ -602,13 +674,18 @@ class NetworkEvolutionFitness:
             'pickups': 0,
             'successful_drops': 0,
             'failed_drops': 0,
-            'path_score': 0.0
+            'path_score': 0.0,
+            'path_length_reward': 0.0
         }
         self.position_updates = {}
         self.processed_neurons = set()
         self.agent_radius = 0.5
-
-        # Create monitor window
+        
+        # Debug and Update Function
+        self.debug = debug
+        self.update_best = update_best_func
+        
+        # Initialize monitor
         try:
             self.monitor = NetworkMonitorWindow(volume_size=self.network_params.volume_size)
             time.sleep(0.5)
@@ -621,40 +698,19 @@ class NetworkEvolutionFitness:
 
         # Initialize last connectivity score
         self._last_connectivity = 0
-
+        
         # Start the background monitor update thread
         self._start_background_updates()
 
-        # Define maximum path length and reward/penalty factor
-        self.max_path_length = config.get('max_path_length', 1000.0)  # Default maximum path length
-        self.path_length_factor = config.get('path_length_factor', 0.01)  # Default factor for reward/penalty per unit distance
-
-    def _start_background_updates(self, update_interval: float = 1.0):
-        """Start a background thread to continuously update the monitor window."""
-
-        def update_loop():
-            while True:
-                try:
-                    current_state = self.network.get_network_state()
-                    if self.monitor and hasattr(self.monitor, 'visualization_enabled'):
-                        if self.monitor.visualization_enabled:
-                            self.monitor.update_neuron_positions(current_state['neuron_positions'])
-                except Exception as e:
-                    if self.debug:
-                        print(f"Error in background update loop: {e}")
-                time.sleep(update_interval)
-
-        update_thread = threading.Thread(target=update_loop, daemon=True)
-        update_thread.start()
-
     def calculate_connectivity_score(self) -> float:
         """Calculate network connectivity as a percentage (0-100)"""
-        unreachable = self.network.compute_unreachable_neurons()
+        unreachable_percentage = self.network.compute_unreachable_neurons()
         total_neurons = len(self.network.neurons)
+
         if total_neurons == 0:
             connectivity = 0.0
         else:
-            connectivity = unreachable
+            connectivity = unreachable_percentage
 
         try:
             if self.monitor and abs(connectivity - self._last_connectivity) > 1:
@@ -666,10 +722,6 @@ class NetworkEvolutionFitness:
 
         return connectivity
 
-    def compute(self, encoded_individual, ga_instance) -> float:
-        """Process the genome and compute fitness"""
-        return self.process_genome(encoded_individual)
-
     def process_genome(self, genome: List[int]) -> float:
         """Process genome using navigation system"""
         # Reset state
@@ -678,13 +730,17 @@ class NetworkEvolutionFitness:
             'pickups': 0,
             'successful_drops': 0,
             'failed_drops': 0,
-            'path_score': 0.0
+            'path_score': 0.0,
+            'path_length_reward': 0.0
         }
         self.position_updates = {}
         self.processed_neurons = set()
         self.current_pos = Position(0.0, 0.0, 0.0)
-        self.navigation.current_heading = [1.0, 0.0, 0.0]
+        self.navigation.current_heading = np.array([1.0, 0.0, 0.0], dtype=np.float64)
         self.pickup_bag = []
+
+        if self.debug:
+            print("\n[GENOME] Starting genome processing")
 
         # Reset visualization
         if self.monitor:
@@ -706,20 +762,24 @@ class NetworkEvolutionFitness:
             selector = command['selector']
 
             if cmd_type.endswith('HEADING'):
-                # Update heading based on selector-scaled angle
                 angle = self.navigation._normalize_angle(magnitude, selector)
                 self.navigation.update_heading(cmd_type[0], angle)
+                if self.debug:
+                    print(f"[NAV] {cmd_type} rotation: {angle:.2f}°")
 
             elif cmd_type == 'MOVE':
-                # Calculate movement using selector-scaled distance
                 distance = self.navigation._scale_magnitude_to_distance(magnitude, selector)
-                start_pos = (self.current_pos.x, self.current_pos.y, self.current_pos.z)
+                if self.debug:
+                    print(f"[NAV] Moving distance: {distance:.2f}")
 
                 # Update position with wrapping
                 self.current_pos = Position(
-                    (self.current_pos.x + self.navigation.current_heading[0] * distance) % self.network_params.volume_size,
-                    (self.current_pos.y + self.navigation.current_heading[1] * distance) % self.network_params.volume_size,
-                    (self.current_pos.z + self.navigation.current_heading[2] * distance) % self.network_params.volume_size
+                    (self.current_pos.x + self.navigation.current_heading[
+                        0] * distance) % self.network_params.volume_size,
+                    (self.current_pos.y + self.navigation.current_heading[
+                        1] * distance) % self.network_params.volume_size,
+                    (self.current_pos.z + self.navigation.current_heading[
+                        2] * distance) % self.network_params.volume_size
                 )
 
                 # Update metrics and check for pickups
@@ -733,34 +793,36 @@ class NetworkEvolutionFitness:
                         time.sleep(0.05)
 
             elif cmd_type == 'DROP' and self.pickup_bag:
+                if self.debug:
+                    print(f"[DROP] Attempting drop with {len(self.pickup_bag)} neurons in bag")
                 self.attempt_drop(neuron_positions)
 
-        # Apply network updates and calculate fitness
+        # Apply all network updates after path completion
         if self.position_updates:
             self.network.update_neuron_positions(self.position_updates)
+            self.network.update_connections()  # Ensure connections are updated
 
+        # Calculate connectivity score after network updates
         connectivity_score = self.calculate_connectivity_score()
 
         # Calculate path length reward/penalty
         path_distance = self.metrics['path_distance']
         if path_distance <= self.max_path_length:
-            # Reward proportional to the path length
             path_length_reward = path_distance * self.path_length_factor
         else:
-            # Reward up to the max path length, penalize excess
             over_distance = path_distance - self.max_path_length
-            path_length_reward = (self.max_path_length * self.path_length_factor) - (over_distance * self.path_length_factor)
+            path_length_reward = (self.max_path_length * self.path_length_factor) - (
+                        over_distance * self.path_length_factor)
 
         # Update metrics
         self.metrics['path_length_reward'] = path_length_reward
 
-        # Final fitness calculation
-        final_fitness = self.metrics['path_score'] + (connectivity_score * 2) + path_length_reward
+        # Final fitness calculation with updated connectivity
+        final_fitness = self.metrics['path_score'] + (connectivity_score * 4) + path_length_reward
 
-        # Check if we've achieved 100% connectivity
         if connectivity_score == 100:
             if self.debug:
-                print("\nExiting: Achieved 100% network connectivity")
+                print("\n[SUCCESS] Achieved 100% network connectivity")
                 print(f"Final Stats:")
                 print(f"Path Distance: {self.metrics['path_distance']:.2f}")
                 print(f"Successful Drops: {self.metrics['successful_drops']}")
@@ -769,7 +831,7 @@ class NetworkEvolutionFitness:
             sys.exit(0)
 
         if self.debug:
-            print(f"\nFitness Calculation Details:")
+            print(f"\n[FITNESS] Calculation Details:")
             print(f"Path Distance: {path_distance:.2f}")
             print(f"Path Length Reward: {path_length_reward:.2f}")
             print(f"Pickups: {self.metrics['pickups']}")
@@ -784,79 +846,9 @@ class NetworkEvolutionFitness:
 
         return final_fitness
 
-    def check_for_pickups(self, neuron_positions):
-        """Check for pickups at current position"""
-        current_pos_tuple = (
-            round(self.current_pos.x),
-            round(self.current_pos.y),
-            round(self.current_pos.z)
-        )
-
-        for nid, data in neuron_positions.items():
-            neuron = self.network.neurons[nid]
-            if (
-                neuron.type == NeuronType.HIDDEN and
-                nid not in self.pickup_bag and
-                nid not in self.position_updates and
-                nid not in self.processed_neurons
-            ):
-                neuron_pos = tuple(round(x) for x in data['position'])
-                if self.positions_overlap(neuron_pos, current_pos_tuple):
-                    self.pickup_bag.append(nid)
-                    self.metrics['pickups'] += 1
-                    self.metrics['path_score'] += self.pickup_reward
-                    break
-
-    def attempt_drop(self, neuron_positions):
-        """Attempt to drop a neuron from pickup bag"""
-        drop_pos = self.calculate_drop_position()
-        pos_tuple = (round(drop_pos.x), round(drop_pos.y), round(drop_pos.z))
-
-        # Check if position is clear
-        is_clear = not any(
-            self.positions_overlap(pos_tuple, tuple(round(x) for x in pos['position']))
-            for nid, pos in neuron_positions.items()
-            if nid not in self.pickup_bag and nid not in self.position_updates
-        )
-
-        if is_clear:
-            neuron_id = self.pickup_bag.pop(0)
-            self.position_updates[neuron_id] = pos_tuple
-            self.processed_neurons.add(neuron_id)
-            self.metrics['successful_drops'] += 1
-            self.metrics['path_score'] += self.successful_drop_reward
-
-            # Visualization update
-            if self.monitor and hasattr(self.monitor, 'visualization_enabled'):
-                if self.monitor.visualization_enabled:
-                    self.monitor.update_drop_locations([Position(*pos_tuple)])
-                    time.sleep(0.05)
-        else:
-            self.metrics['failed_drops'] += 1
-            self.metrics['path_score'] += self.failed_drop_penalty
-
-    def positions_overlap(self, pos1: tuple, pos2: tuple) -> bool:
-        """Check if two positions overlap considering agent radius"""
-        dx = abs(pos1[0] - pos2[0])
-        dy = abs(pos1[1] - pos2[1])
-        dz = abs(pos1[2] - pos2[2])
-
-        # Adjust for wrapping
-        volume_size = self.network_params.volume_size
-        dx = min(dx, volume_size - dx)
-        dy = min(dy, volume_size - dy)
-        dz = min(dz, volume_size - dz)
-
-        distance = np.sqrt(dx * dx + dy * dy + dz * dz)
-        return distance <= self.agent_radius
-
-    def calculate_drop_position(self) -> Position:
-        """Calculate drop position based on current position"""
-        return Position(
-            round(self.current_pos.x),
-            round(self.current_pos.y),
-            round(self.current_pos.z)
-        )
+    def compute(self, encoded_individual, ga_instance) -> float:
+        """Process the genome and compute fitness"""
+        return self.process_genome(encoded_individual)
 
     def get_stats(self) -> Dict:
         """Get current statistics"""
@@ -881,4 +873,3 @@ class NetworkEvolutionFitness:
                 'current_heading': self.navigation.current_heading
             }
         }
-

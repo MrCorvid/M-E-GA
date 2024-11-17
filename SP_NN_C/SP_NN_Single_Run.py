@@ -7,7 +7,7 @@ from SP_NN_Fitness import NetworkEvolutionFitness
 
 
 class ExperimentRunner:
-    def __init__(self, debug: bool = False, config_file=None):
+    def __init__(self, debug: bool = True, config_file=None):
         self.debug = debug
 
         # Comprehensive configuration dictionary
@@ -20,7 +20,7 @@ class ExperimentRunner:
                 'total_neurons': 400,
 
                 # Neuron radius parameters
-                'max_radius': 4.0,
+                'max_radius': 3.0,
                 'min_radius': 1.0,
                 'hidden_radius_range': (.25, 1.0),
                 'base_radius_shrink_rate': 0.95,
@@ -37,20 +37,31 @@ class ExperimentRunner:
             # Simplified reward parameters for navigation-based system
             'pickup_reward': 10.0,
             'successful_drop_reward': 15.0,
-            'failed_drop_penalty': -0.0
+            'failed_drop_penalty': -0.0,
+            'max_path_length': 300,
+            'path_length_factor' : 2
         }
 
         # GA configuration - modified for navigation genome
         self.ga_config = {
-            'mutation_prob': 0.15,           # Standard mutation rate
-            'crossover_prob': 0.70,          # Higher crossover for numeric genes
-            'elitism_ratio': 0.05,           # Keep best solutions
+            'mutation_prob': 0.15,
+            'delimited_mutation_prob': 0.11,
+            'open_mutation_prob': 0.10,
+            'capture_mutation_prob': 0.04,
+            'delimiter_insert_prob': 0.04,
+            'delimit_delete_prob': 0.06,
+            'crossover_prob': 0.00,
+            'elitism_ratio': 0.00,
+            'base_gene_prob': 0.35,
+            'capture_gene_prob': 0.02,
+            'max_individual_length': 50,
             'population_size': 400,
             'num_parents': 200,
             'max_generations': 1000,
-            'max_individual_length': 80,      # Length for navigation genome
+            'delimiters': False,
+            'delimiter_space': 2,
             'logging': False,
-            'experiment_name': 'neural_evolution_nav',
+            'experiment_name': 'neural_evolution',
             'seed': None
         }
 
@@ -64,6 +75,7 @@ class ExperimentRunner:
         if fitness > self.best_organism["fitness"]:
             self.best_organism["genome"] = genome
             self.best_organism["fitness"] = fitness
+            print(f"New best fitness: {fitness}")
             if verbose:
                 print(f"New best fitness: {fitness}")
                 print("\nBest Genome:")

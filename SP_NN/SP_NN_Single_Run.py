@@ -1,4 +1,4 @@
-# experiment_runner.py
+# SP_NN_Single_Run.py
 
 import random
 import numpy as np
@@ -7,7 +7,7 @@ from SP_NN_Fitness import NetworkEvolutionFitness
 
 
 class ExperimentRunner:
-    def __init__(self, debug: bool = False, config_file=None):
+    def __init__(self, debug: bool = True, config_file=None):
         self.debug = debug
 
         # Comprehensive configuration dictionary
@@ -18,16 +18,16 @@ class ExperimentRunner:
                 'num_input': 10,
                 'num_output': 20,
                 'total_neurons': 400,
-
+                
                 # Neuron radius parameters
-                'max_radius': 4.0,
+                'max_radius': 3.0,
                 'min_radius': 1.0,
                 'hidden_radius_range': (.25, 1.0),
                 'base_radius_shrink_rate': 0.95,
                 'input_radius_factor': 1.0,
                 'interface_radius_factor': 1.0,
                 'interface_offset': 1.0,
-
+                
                 # Activation parameters
                 'activation_budget': 1000,
                 'time_window_size': 100,
@@ -35,29 +35,29 @@ class ExperimentRunner:
                 'activation_radius_factor': 0.2
             },
             'path_rewards': {
-                'max_path_length': 100,
-                'path_step_reward': 1.0,
-                'pickup_reward': 3.0,
-                'successful_drop_reward': 3.0,
+                'max_path_length': 60,
+                'path_step_reward': 1.00,
+                'pickup_reward': 0.5,
+                'successful_drop_reward': 5.0,
                 'failed_drop_penalty': -0.0,
-                'empty_bag_reward': 0.00,
-                'step_penalty': -6.0
+                'empty_bag_reward': 10.00,
+                'step_penalty': -10.0
             }
         }
 
-        # GA configuration
+        # GA configuration - modified for navigation genome
         self.ga_config = {
             'mutation_prob': 0.15,
             'delimited_mutation_prob': 0.11,
-            'open_mutation_prob': 0.09,
+            'open_mutation_prob': 0.10,
             'capture_mutation_prob': 0.04,
             'delimiter_insert_prob': 0.04,
-            'delimit_delete_prob': 0.05,
+            'delimit_delete_prob': 0.06,
             'crossover_prob': 0.00,
             'elitism_ratio': 0.00,
             'base_gene_prob': 0.35,
-            'capture_gene_prob': 0.03,
-            'max_individual_length': 100,
+            'capture_gene_prob': 0.02,
+            'max_individual_length': 50,
             'population_size': 400,
             'num_parents': 200,
             'max_generations': 1000,
@@ -74,12 +74,18 @@ class ExperimentRunner:
             "fitness": float('-inf')
         }
 
-    def update_best_organism(self, genome, fitness, verbose=True):
+    def update_best_organism(self, genome, fitness, verbose=False):
         if fitness > self.best_organism["fitness"]:
             self.best_organism["genome"] = genome
             self.best_organism["fitness"] = fitness
+            print(f"New best fitness: {fitness}")
             if verbose:
                 print(f"New best fitness: {fitness}")
+                print("\nBest Genome:")
+                # Print genome in chunks of 10 for readability
+                genome_str = ''.join(map(str, genome))
+                chunks = [genome_str[i:i+10] for i in range(0, len(genome_str), 10)]
+                print(' '.join(chunks))
                 self.print_network_stats()
 
     def print_network_stats(self):
@@ -90,68 +96,89 @@ class ExperimentRunner:
                 print("\nNetwork Statistics:")
                 print(f"Connectivity: {stats['connectivity']['current']:.2f}%")
                 print(f"Unreachable neurons: {stats['connectivity']['unreachable_neurons']}")
+                print("\nPath Metrics:")
+                print(f"Max Length: {stats['path']['max_length']}")
+                print(f"Step Reward: {stats['path']['path_step_reward']}")
+                print(f"Pickup Reward: {stats['path']['pickup_reward']}")
+                print(f"Drop Reward: {stats['path']['successful_drop_reward']}")
+                print(f"Step Penalty: {stats['path']['step_penalty']}")
                 print("\nNeuron Distribution:")
                 print(f"Total neurons: {stats['network']['total_neurons']}")
                 print(f"Input neurons: {stats['network']['input_neurons']}")
                 print(f"Hidden neurons: {stats['network']['hidden_neurons']}")
                 print(f"Output neurons: {stats['network']['output_neurons']}")
-                print("\nActivation Parameters:")
-                print(f"Activation budget: {self.config['network_params']['activation_budget']}")
-                print(f"Time window: {self.config['network_params']['time_window_size']}")
+                print("\nCurrent State:")
+                print(f"Pickup bag size: {stats['current_state']['pickup_bag_size']}")
+                print(f"Current position: {stats['current_state']['current_position']}")
 
     def setup_experiment(self):
         # Create fitness function with update callback
         self.fitness_function = NetworkEvolutionFitness(
             config=self.config,
             update_best_func=self.update_best_organism,
-            debug=self.debug  # Pass debug flag to fitness function
+            debug=self.debug
         )
 
-        # Initialize GA
+        # Initialize GA with numeric genes [0-9]
         self.ga = M_E_GA_Base(
-            genes=self.fitness_function.genes,
+            genes=list(range(10)),  # Numeric genes for binary navigation encoding
             fitness_function=lambda ind, ga_instance: self.fitness_function.compute(ind, ga_instance),
             **self.ga_config
         )
 
     def run_experiment(self):
         if self.debug:
-            print("Starting Neural Evolution Experiment...")
+            print("Starting Neural Evolution Navigation Experiment...")
             print("\nComprehensive Configuration:")
-            for section, params in self.config.items():
-                print(f"\n{section.replace('_', ' ').title()}:")
-                for key, value in params.items():
-                    print(f"  {key}: {value}")
-            print(f"\nPopulation size: {self.ga_config['population_size']}")
-            print(f"Max generations: {self.ga_config['max_generations']}\n")
+
+            # Network Parameters
+            print("\nNetwork Parameters:")
+            for key, value in self.config['network_params'].items():
+                print(f"  {key}: {value}")
+
+            # Path Rewards
+            print("\nPath Rewards:")
+            for key, value in self.config['path_rewards'].items():
+                print(f"  {key}: {value}")
+
+            # GA Configuration
+            print("\nGA Configuration:")
+            print(f"  Population size: {self.ga_config['population_size']}")
+            print(f"  Max generations: {self.ga_config['max_generations']}")
+            print(f"  Mutation rate: {self.ga_config['mutation_prob']}")
+            print(f"  Crossover rate: {self.ga_config['crossover_prob']}")
+            print(f"  Genome length: {self.ga_config['max_individual_length']}\n")
 
         # Run the GA
         self.ga.run_algorithm()
 
-        # Get results
+        # Get results - genome is now list of integers
         best_genome = self.best_organism["genome"]
         best_fitness = self.best_organism["fitness"]
-        best_solution = self.ga.decode_organism(best_genome, format=True) if best_genome is not None else []
 
-        # Only print final results regardless of debug setting
+        # Print final results
         print("\nExperiment Results:")
-        print(f"Best Solution: {best_solution}")
+        if best_genome is not None:
+            print("Best Genome:")
+            genome_str = ''.join(map(str, best_genome))
+            chunks = [genome_str[i:i + 10] for i in range(0, len(genome_str), 10)]
+            print(' '.join(chunks))
         print(f"Best Fitness: {best_fitness}")
-        print(f"Solution Length: {len(best_solution)}")
+        print(f"Genome Length: {len(best_genome) if best_genome else 0}")
 
         if self.debug:
-            self.print_network_stats()  # Print final network statistics only in debug mode
+            self.print_network_stats()
 
         return {
             'best_genome': best_genome,
             'best_fitness': best_fitness,
-            'best_solution': best_solution
+            'metrics': self.fitness_function.get_stats() if hasattr(self, 'fitness_function') else None
         }
 
 
 if __name__ == "__main__":
     # Create and run experiment with debug flag
-    debug_mode = False  # Set to True to enable debug output
+    debug_mode = True  # Set to True to enable debug output
     experiment = ExperimentRunner(debug=debug_mode)
     experiment.setup_experiment()
     results = experiment.run_experiment()
