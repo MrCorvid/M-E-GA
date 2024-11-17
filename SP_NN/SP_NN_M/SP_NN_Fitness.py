@@ -1,0 +1,179 @@
+# SP_NN_Fitness.py
+
+from typing import List, Dict, Optional, Callable
+from SP_NN import (
+    create_network,
+    SpatialNeuralNetwork,
+    NetworkParameters,
+    Position,
+    NeuronType
+)
+from spatial_navigation import NavigationSystem
+from network_monitor import NetworkMonitor
+from network_evolution import NetworkEvolution
+from fitness_evaluator import FitnessEvaluator
+import threading
+import time
+import sys
+import queue
+import tkinter as tk
+from tkinter import ttk
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from dataclasses import dataclass
+from collections import defaultdict, deque
+from enum import Enum
+import numpy as np
+from scipy.spatial import KDTree
+import concurrent.futures
+from threading import Lock, RLock
+
+
+class NetworkEvolutionFitness:
+    def __init__(
+            self,
+            config: Dict[str, any],
+            update_best_func: Optional[Callable[[any, float], None]] = None,
+            debug: bool = False
+    ):
+        """
+        Initialize Phase 1 fitness evaluation focusing on network connectivity structure.
+
+        Args:
+            config (Dict[str, any]): Configuration dictionary containing all parameters.
+            update_best_func (Callable, optional): Callback function to update the best organism.
+            debug (bool, optional): Flag to enable debug mode.
+        """
+        # Extract network parameters and path rewards from config
+        network_params = config.get('network_params', {})
+        path_rewards = config.get('path_rewards', {})
+
+        # Initialize NetworkParameters
+        self.network_params = NetworkParameters(
+            volume_size=network_params.get('volume_size', 8.0),
+            num_input=network_params.get('num_input', 100),
+            num_output=network_params.get('num_output', 4),
+            total_neurons=network_params.get('total_neurons', 500),
+            max_radius=network_params.get('max_radius', 3.0),
+            min_radius=network_params.get('min_radius', 0.1),
+            input_radius_factor=network_params.get('input_radius_factor', 0.25),
+            interface_radius_factor=network_params.get('interface_radius_factor', 0.3),
+            hidden_radius_range=network_params.get('hidden_radius_range', (0.10, 0.80)),
+            interface_offset=network_params.get('interface_offset', 1.0),
+            activation_budget=network_params.get('activation_budget', 1000),
+            time_window_size=network_params.get('time_window_size', 100),
+            base_radius_shrink_rate=network_params.get('base_radius_shrink_rate', 0.95),
+            activation_radius_factor=network_params.get('activation_radius_factor', 0.2),
+            activation_threshold=network_params.get('activation_threshold', 0.5)
+        )
+
+        # Initialize the spatial neural network
+        self.network = create_network(self.network_params)
+
+        # Initialize path reward parameters
+        self.max_path_length = path_rewards.get('max_path_length', 60)
+        self.path_step_reward = path_rewards.get('path_step_reward', 1.00)
+        self.pickup_reward = path_rewards.get('pickup_reward', 0.5)
+        self.successful_drop_reward = path_rewards.get('successful_drop_reward', 5.0)
+        self.failed_drop_penalty = path_rewards.get('failed_drop_penalty', -0.0)
+        self.empty_bag_reward = path_rewards.get('empty_bag_reward', 10.00)
+        self.step_penalty = path_rewards.get('step_penalty', -10.0)
+
+        # Debug and Update Function
+        self.debug = debug
+        self.update_best = update_best_func
+
+        # Initialize modular components
+        self.navigator = NavigationSystem(volume_size=self.network_params.volume_size)
+
+        # Create monitor window first
+        try:
+            self.monitor = NetworkMonitor(volume_size=self.network_params.volume_size)
+            # Give the window a moment to initialize
+            time.sleep(0.5)
+            # Initialize path visualization with starting position
+            if self.monitor.visualization_enabled:
+                self.monitor.update_path_step(Position(0.0, 0.0, 0.0))
+        except Exception as e:
+            if self.debug:
+                print(f"Warning: Could not create monitor window: {e}")
+            self.monitor = None
+
+        # Initialize evolution system
+        self.evolution = NetworkEvolution(
+            network=self.network,
+            navigator=self.navigator,
+            monitor=self.monitor,
+            params=self.network_params
+        )
+
+        # Initialize fitness evaluator
+        self.evaluator = FitnessEvaluator(
+            evolution_system=self.evolution,
+            movement_rewards=path_rewards,
+            debug=debug
+        )
+
+        # Define genes for path evolution
+        self.genes = ['U', 'D', 'F', 'B', 'L', 'R', 'DR']
+
+        # Initialize last connectivity score
+        self._last_connectivity = 0
+
+    def compute(self, encoded_individual, ga_instance) -> float:
+        """
+        Phase 1 fitness computation with network visualization at 100% connectivity.
+        Args:
+            encoded_individual: The encoded genome representing the path.
+            ga_instance: The genetic algorithm instance.
+        Returns:
+            float: The calculated fitness score.
+        """
+        # Decode path using GA instance if provided
+        path = ga_instance.decode_organism(encoded_individual) if ga_instance else encoded_individual
+
+        # Compute fitness using evaluator
+        fitness = self.evaluator.compute_fitness(path)
+
+        # Check if we've achieved 100% connectivity
+        connectivity = int(self.evolution.calculate_connectivity())
+        if connectivity == 100:
+            if self.debug:
+                print("\nExiting Phase 1: Achieved 100% network connectivity")
+                stats = self.get_stats()
+                print(f"Final Stats:")
+                print(f"Total Neurons: {stats['network']['total_neurons']}")
+                print(f"Path Length: {len(path)}")
+
+            # Exit the program since connectivity is achieved
+            sys.exit(0)
+
+        if self.debug:
+            self._print_debug_info(path, fitness, connectivity)
+
+        if self.update_best:
+            self.update_best(encoded_individual, fitness)
+
+        return fitness
+
+    def _print_debug_info(self, path: List[str], fitness: float, connectivity: float):
+        """Print debug information about fitness calculation"""
+        if not self.debug:
+            return
+
+        print("\nFitness Calculation Details:")
+        print(f"Path Length: {len(path)}")
+        print(f"Network Connectivity: {connectivity}%")
+        print(f"Final Fitness: {fitness:.2f}")
+
+    def get_stats(self) -> Dict:
+        """Get current statistics from all components"""
+        return {
+            'connectivity': {
+                'current': self.evolution.calculate_connectivity(),
+                'unreachable_neurons': self.network.compute_connectivity_score()
+            },
+            'path': self.evaluator.get_stats(),
+            'network': self.evolution.get_network_stats(),
+            'current_state': self.evolution.get_current_state()
+        }
