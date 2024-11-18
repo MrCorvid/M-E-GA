@@ -356,7 +356,7 @@ class SpatialNeuralNetwork:
                 'remaining_budget': self.params.activation_budget - self.window_activations
             }
 
-    def compute_unreachable_neurons(self) -> float:
+    def compute_connectivity_score(self) -> float:
         """
         Computes the connectivity score of neurons using component counting.
         The score ranges from 0 to 100:
@@ -490,14 +490,29 @@ def create_network(params: NetworkParameters) -> SpatialNeuralNetwork:
     input_radius = params.max_radius * params.input_radius_factor
     interface_radius = params.max_radius * params.interface_radius_factor
 
+    # Set to keep track of occupied positions
+    occupied_positions = set()
+
+    def is_position_occupied(position: Position) -> bool:
+        position_key = (int(position.x), int(position.y), int(position.z))
+        return position_key in occupied_positions
+
+    def add_position(position: Position):
+        position_key = (int(position.x), int(position.y), int(position.z))
+        occupied_positions.add(position_key)
+
     # Create input and interface neurons
     for _ in range(params.num_input):
-        # Generate continuous position for input neuron
-        input_pos = Position(
-            x=np.random.uniform(-half_volume, half_volume),
-            y=np.random.uniform(-half_volume, half_volume),
-            z=np.random.uniform(-half_volume, half_volume)
-        )
+        # Generate unique position for input neuron using integer positions
+        while True:
+            input_pos = Position(
+                x=float(np.random.randint(-int(half_volume), int(half_volume))),
+                y=float(np.random.randint(-int(half_volume), int(half_volume))),
+                z=float(np.random.randint(-int(half_volume), int(half_volume)))
+            )
+            if not is_position_occupied(input_pos):
+                add_position(input_pos)
+                break
 
         input_neuron = Neuron(id_counter, NeuronType.INPUT, input_pos, params)
         input_neuron.radius = input_radius
@@ -505,21 +520,24 @@ def create_network(params: NetworkParameters) -> SpatialNeuralNetwork:
         network.add_neuron(input_neuron)
         id_counter += 1
 
-        # Generate interface neuron position with continuous offset
-        dx = np.random.uniform(-params.interface_offset, params.interface_offset)
-        dy = np.random.uniform(-params.interface_offset, params.interface_offset)
-        dz = np.random.uniform(-params.interface_offset, params.interface_offset)
-
-        # Apply wrapping with centered volume
-        new_x = (input_pos.x + dx + half_volume) % params.volume_size - half_volume
-        new_y = (input_pos.y + dy + half_volume) % params.volume_size - half_volume
-        new_z = (input_pos.z + dz + half_volume) % params.volume_size - half_volume
-
-        interface_pos = Position(
-            x=float(new_x),
-            y=float(new_y),
-            z=float(new_z)
-        )
+        # Generate unique position for interface neuron adjacent to input
+        while True:
+            # Pick a random adjacent position (including diagonals)
+            dx = np.random.randint(-1, 2)
+            dy = np.random.randint(-1, 2)
+            dz = np.random.randint(-1, 2)
+            # Apply wrapping with centered volume
+            new_x = (int(input_pos.x) + dx + int(half_volume)) % int(params.volume_size) - int(half_volume)
+            new_y = (int(input_pos.y) + dy + int(half_volume)) % int(params.volume_size) - int(half_volume)
+            new_z = (int(input_pos.z) + dz + int(half_volume)) % int(params.volume_size) - int(half_volume)
+            interface_pos = Position(
+                x=float(new_x),
+                y=float(new_y),
+                z=float(new_z)
+            )
+            if not is_position_occupied(interface_pos):
+                add_position(interface_pos)
+                break
 
         interface_neuron = Neuron(id_counter, NeuronType.HIDDEN, interface_pos, params)
         interface_neuron.radius = interface_radius
@@ -529,11 +547,15 @@ def create_network(params: NetworkParameters) -> SpatialNeuralNetwork:
 
     # Create hidden neurons
     for _ in range(params.num_hidden):
-        pos = Position(
-            x=np.random.uniform(-half_volume, half_volume),
-            y=np.random.uniform(-half_volume, half_volume),
-            z=np.random.uniform(-half_volume, half_volume)
-        )
+        while True:
+            pos = Position(
+                x=float(np.random.randint(-int(half_volume), int(half_volume))),
+                y=float(np.random.randint(-int(half_volume), int(half_volume))),
+                z=float(np.random.randint(-int(half_volume), int(half_volume)))
+            )
+            if not is_position_occupied(pos):
+                add_position(pos)
+                break
 
         neuron = Neuron(id_counter, NeuronType.HIDDEN, pos, params)
         min_hidden_radius = params.hidden_radius_range[0] * params.max_radius
@@ -544,11 +566,15 @@ def create_network(params: NetworkParameters) -> SpatialNeuralNetwork:
 
     # Create output neurons
     for _ in range(params.num_output):
-        pos = Position(
-            x=np.random.uniform(-half_volume, half_volume),
-            y=np.random.uniform(-half_volume, half_volume),
-            z=np.random.uniform(-half_volume, half_volume)
-        )
+        while True:
+            pos = Position(
+                x=float(np.random.randint(-int(half_volume), int(half_volume))),
+                y=float(np.random.randint(-int(half_volume), int(half_volume))),
+                z=float(np.random.randint(-int(half_volume), int(half_volume)))
+            )
+            if not is_position_occupied(pos):
+                add_position(pos)
+                break
 
         output_neuron = Neuron(id_counter, NeuronType.OUTPUT, pos, params)
         output_neuron.radius = 0.0
@@ -583,7 +609,7 @@ if __name__ == "__main__":
     network = create_network(params)
 
     # Compute number of unreachable neurons
-    unreachable_neurons = network.compute_unreachable_neurons()
+    unreachable_neurons = network.compute_connectivity_score()
     print(f"Unreachable Neurons: {unreachable_neurons}")
 
     # Get positions of hidden neurons
@@ -609,7 +635,7 @@ if __name__ == "__main__":
     network.update_hidden_neuron_positions(modified_positions)
 
     # Recompute number of unreachable neurons after modification
-    unreachable_neurons_after = network.compute_unreachable_neurons()
+    unreachable_neurons_after = network.compute_connectivity_score()
     print(f"Unreachable Neurons After Modification: {unreachable_neurons_after}")
 
     # Plot the network
