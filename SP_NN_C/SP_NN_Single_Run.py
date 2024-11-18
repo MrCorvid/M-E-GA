@@ -7,22 +7,22 @@ from SP_NN_Fitness import NetworkEvolutionFitness
 
 
 class ExperimentRunner:
-    def __init__(self, debug: bool = True, config_file=None):
+    def __init__(self, debug: bool = False, config_file=None):
         self.debug = debug
 
         # Comprehensive configuration dictionary
         self.config = {
             'network_params': {
                 # Core network structure
-                'volume_size': 35.0,
+                'volume_size': 40.0,
                 'num_input': 10,
                 'num_output': 20,
-                'total_neurons': 400,
+                'total_neurons': 500,
 
                 # Neuron radius parameters
-                'max_radius': 4.0,
-                'min_radius': 1.0,
-                'hidden_radius_range': (.25, 1.0),
+                'max_radius': 3.0,
+                'min_radius': .50,
+                'hidden_radius_range': (.15, 1.0),
                 'base_radius_shrink_rate': 0.95,
                 'input_radius_factor': 1.0,
                 'interface_radius_factor': 1.0,
@@ -35,31 +35,31 @@ class ExperimentRunner:
                 'activation_radius_factor': 0.2
             },
             'path_rewards': {
-                'max_path_length': 100,
+                'max_path_length': 70,
                 'path_step_reward': 1.0,
-                'pickup_reward': 10.0,
+                'pickup_reward': 0.0,
                 'successful_drop_reward': 15.0,
                 'failed_drop_penalty': -0.0,
                 'empty_bag_reward': 0.00,
-                'step_penalty': -12.0
+                'step_penalty': -5.0
             }
         }
 
         # GA configuration
         self.ga_config = {
             'mutation_prob': 0.15,
-            'delimited_mutation_prob': 0.11,
-            'open_mutation_prob': 0.10,
-            'capture_mutation_prob': 0.04,
+            'delimited_mutation_prob': 0.10,
+            'open_mutation_prob': 0.09,
+            'capture_mutation_prob': 0.09,
             'delimiter_insert_prob': 0.04,
             'delimit_delete_prob': 0.06,
             'crossover_prob': 0.00,
             'elitism_ratio': 0.00,
-            'base_gene_prob': 0.35,
+            'base_gene_prob': 0.25,
             'capture_gene_prob': 0.02,
             'max_individual_length': 50,
-            'population_size': 400,
-            'num_parents': 200,
+            'population_size': 600,
+            'num_parents': 400,
             'max_generations': 1000,
             'delimiters': False,
             'delimiter_space': 2,

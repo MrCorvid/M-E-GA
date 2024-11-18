@@ -162,6 +162,15 @@ class NetworkMonitor:
             except Exception as e:
                 print(f"Error clearing drops: {e}")
 
+    def clear_path(self):
+        """Clear all path steps from visualization."""
+        self.path_steps = []
+        self.last_position = None
+        if hasattr(self, 'path_line'):
+            self.path_line.set_data([], [])
+            self.path_line.set_3d_properties([])
+            self.canvas.draw()
+
     def toggle_visualization(self):
         """Toggle real-time visualization updates"""
         self.visualization_enabled = self.visualization_var.get()
@@ -187,6 +196,9 @@ class NetworkMonitor:
                     self._update_path_display(message.get('position'))
                 elif message_type == 'clear_drops':
                     self._clear_drops_display()
+                elif message_type == 'clear_visualization':
+                    self._clear_visualization()
+
         except Exception as e:
             print(f"Error handling message: {e}")
 

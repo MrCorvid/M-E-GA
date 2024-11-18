@@ -4,12 +4,14 @@ from spatial_navigation import NavigationSystem
 from network_monitor import NetworkMonitor
 import threading
 import time
+from collections import deque
 import numpy as np
 from scipy.spatial import KDTree
 
 
 class NetworkEvolution:
-    AGENT_RADIUS = 0.5  # Interaction radius for agent
+    AGENT_RADIUS = 1.00  # Interaction radius for agent
+    MAX_PICKUP_BAG = 500  # Maximum neurons we can carry at once
 
     def __init__(
             self,
@@ -33,7 +35,7 @@ class NetworkEvolution:
         self.params = params
 
         # Evolution state
-        self.pickup_bag = []
+        self.pickup_bag = deque(maxlen=self.MAX_PICKUP_BAG)  # FIFO queue for pickups
         self.processed_neurons = set()
         self.last_command_time = 0
 
@@ -48,10 +50,11 @@ class NetworkEvolution:
             should_visualize = self.monitor and self.monitor.visualization_enabled
             if should_visualize:
                 self.monitor.clear_drops()
+                self.monitor.clear_path()
                 self.monitor.update_path_step(self.navigator.current_pos)
 
             # Reset state
-            self.pickup_bag = []
+            self.pickup_bag.clear()
             self.navigator.current_pos = Position(0.0, 0.0, 0.0)
 
             # Get current network state
@@ -65,13 +68,6 @@ class NetworkEvolution:
             command_history = results['command_history']
             command_positions = results['command_positions']
 
-            # Debug print
-            print("\nCommand Sequence Analysis:")
-            for idx, (cmd, mag) in enumerate(command_history):
-                pos_idx = command_positions[idx]
-                pos = positions[pos_idx] if pos_idx < len(positions) else positions[-1]
-                print(f"Command {idx}: Type={cmd}, Magnitude={mag:.2f}, Position={pos}")
-
             # Tracking metrics
             moves_made = results['moves_made']
             successful_drops = 0
@@ -84,6 +80,7 @@ class NetworkEvolution:
                 (nid, data['position'])
                 for nid, data in neuron_positions.items()
                 if (nid not in self.pickup_bag and
+                    nid not in position_updates and
                     self.network.neurons[nid].type == NeuronType.HIDDEN)
             ]
 
@@ -93,47 +90,45 @@ class NetworkEvolution:
                     [p[0], p[1], p[2]] for p in positions_array
                 ])
                 tree = KDTree(neuron_pos_array)
-                print(f"\nInitial available neurons: {len(neuron_ids)}")
 
             # Process each command position
             for cmd_idx, (command, magnitude) in enumerate(command_history):
                 pos_idx = command_positions[cmd_idx]
                 current_pos = positions[pos_idx]
 
-                print(f"\nProcessing position {pos_idx}:")
-                print(f"Command: {command}, Position: ({current_pos.x:.2f}, {current_pos.y:.2f}, {current_pos.z:.2f})")
-
                 # Check for pickups at every position
-                if available_neurons:
+                if available_neurons and len(self.pickup_bag) < self.MAX_PICKUP_BAG:
                     # Query for nearby neurons
                     nearby_indices = tree.query_ball_point(
                         [current_pos.x, current_pos.y, current_pos.z],
-                        self.AGENT_RADIUS * 2  # Increased radius for better detection
+                        self.AGENT_RADIUS   # Increased radius for better detection
                     )
 
-                    if nearby_indices:
-                        print(f"Found {len(nearby_indices)} nearby neurons")
+                    for idx in nearby_indices:
+                        if len(self.pickup_bag) >= self.MAX_PICKUP_BAG:
+                            break
 
-                        # Handle pickup
-                        idx = nearby_indices[0]  # Pick up the first nearby neuron
                         nid = neuron_ids[idx]
-
                         if nid not in self.pickup_bag and nid not in position_updates:
                             self.pickup_bag.append(nid)
                             pickups_made += 1
-                            print(f"Picked up neuron {nid}")
 
-                            # Update available neurons
-                            mask = np.ones(len(neuron_ids), dtype=bool)
+                    # Update available neurons if any were picked up
+                    if nearby_indices:
+                        # Create mask for remaining neurons
+                        mask = np.ones(len(neuron_ids), dtype=bool)
+                        for idx in nearby_indices:
                             mask[idx] = False
-                            if any(mask):
-                                neuron_pos_array = neuron_pos_array[mask]
-                                neuron_ids = [nid for i, nid in enumerate(neuron_ids) if mask[i]]
-                                tree = KDTree(neuron_pos_array)
 
-                # Handle drops
+                        if any(mask):
+                            neuron_pos_array = neuron_pos_array[mask]
+                            neuron_ids = [nid for i, nid in enumerate(neuron_ids) if mask[i]]
+                            tree = KDTree(neuron_pos_array)
+                        else:
+                            available_neurons = []
+
+                # Handle single drop per DROP command
                 if command == self.navigator.DROP and self.pickup_bag:
-                    print("Processing drop command")
                     heading = self.navigator.heading
                     drop_pos = Position(
                         x=current_pos.x - heading[0] * self.AGENT_RADIUS,
@@ -151,17 +146,15 @@ class NetworkEvolution:
                         position_clear = len(nearby) == 0
 
                     if position_clear:
-                        neuron_id = self.pickup_bag.pop(0)
+                        neuron_id = self.pickup_bag.popleft()  # FIFO order
                         position_updates[neuron_id] = (drop_pos.x, drop_pos.y, drop_pos.z)
                         neurons_moved += 1
                         successful_drops += 1
-                        print(f"Dropped neuron {neuron_id}")
 
                         if should_visualize:
                             self.monitor.update_drop_locations([drop_pos])
                     else:
                         failed_drops += 1
-                        print("Drop failed: position occupied")
 
                 # Update visualization
                 if should_visualize:
@@ -171,11 +164,10 @@ class NetworkEvolution:
             # Apply position updates
             if position_updates:
                 self.network.update_neuron_positions(position_updates)
-                print(f"\nFinal updates: {len(position_updates)} neurons moved")
 
             # Clear visualization after execution
             if should_visualize:
-                time.sleep(0.1)  # Small delay to ensure last updates are visible
+                time.sleep(0.1)
                 self.monitor.clear_drops()
 
             return {
@@ -192,13 +184,12 @@ class NetworkEvolution:
             }
 
         except Exception as e:
-            print(f"Error in movement sequence execution: {e}")
             import traceback
             traceback.print_exc()
 
-            # Clear visualization on error
             if should_visualize:
                 self.monitor.clear_drops()
+                self.monitor.clear_path()
 
             return {
                 'moves_made': 0,
