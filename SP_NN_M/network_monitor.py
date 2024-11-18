@@ -124,14 +124,14 @@ class NetworkMonitor:
             print(f"Error checking queue: {e}")
 
     def update_connectivity(self, value: float):
-        """Update connectivity display"""
+        """Update connectivity display - always process regardless of visualization state"""
         try:
             self.queue.put({'type': 'connectivity', 'value': value})
         except Exception as e:
             print(f"Error updating connectivity: {e}")
 
     def update_neuron_positions(self, neurons: dict):
-        """Update neuron positions"""
+        """Update neuron positions - only if visualization is enabled"""
         if self.visualization_enabled:
             try:
                 self.queue.put({'type': 'neurons', 'data': neurons})
@@ -139,7 +139,7 @@ class NetworkMonitor:
                 print(f"Error updating neurons: {e}")
 
     def update_drop_locations(self, drops: list):
-        """Update drop locations"""
+        """Update drop locations - only if visualization is enabled"""
         if self.visualization_enabled:
             try:
                 self.queue.put({'type': 'drops', 'data': drops})
@@ -147,7 +147,7 @@ class NetworkMonitor:
                 print(f"Error updating drops: {e}")
 
     def update_path_step(self, position: Position):
-        """Update path visualization"""
+        """Update path visualization - only if visualization is enabled"""
         if self.visualization_enabled:
             try:
                 self.queue.put({'type': 'path_step', 'position': position})
@@ -156,29 +156,37 @@ class NetworkMonitor:
 
     def clear_drops(self):
         """Clear all drops"""
-        try:
-            self.queue.put({'type': 'clear_drops'})
-        except Exception as e:
-            print(f"Error clearing drops: {e}")
+        if self.visualization_enabled:
+            try:
+                self.queue.put({'type': 'clear_drops'})
+            except Exception as e:
+                print(f"Error clearing drops: {e}")
 
     def toggle_visualization(self):
         """Toggle real-time visualization updates"""
         self.visualization_enabled = self.visualization_var.get()
+        if not self.visualization_enabled:
+            # Clear visualization when disabled
+            self._clear_visualization()
 
     def _handle_message(self, message: dict):
         """Process different message types"""
         try:
             message_type = message.get('type')
+
+            # Always process connectivity updates
             if message_type == 'connectivity':
                 self._update_connectivity_display(message.get('value'))
-            elif message_type == 'neurons' and self.visualization_enabled:
-                self._update_neuron_positions_display(message.get('data'))
-            elif message_type == 'drops' and self.visualization_enabled:
-                self._update_drop_locations_display(message.get('data'))
-            elif message_type == 'path_step' and self.visualization_enabled:
-                self._update_path_display(message.get('position'))
-            elif message_type == 'clear_drops':
-                self._clear_drops_display()
+            # Only process visualization updates if enabled
+            elif self.visualization_enabled:
+                if message_type == 'neurons':
+                    self._update_neuron_positions_display(message.get('data'))
+                elif message_type == 'drops':
+                    self._update_drop_locations_display(message.get('data'))
+                elif message_type == 'path_step':
+                    self._update_path_display(message.get('position'))
+                elif message_type == 'clear_drops':
+                    self._clear_drops_display()
         except Exception as e:
             print(f"Error handling message: {e}")
 
@@ -263,3 +271,19 @@ class NetworkMonitor:
             self.canvas.draw()
         except Exception as e:
             print(f"Error clearing drops: {e}")
+
+    def _clear_visualization(self):
+        """Clear all visualization elements but keep connectivity display"""
+        try:
+            if hasattr(self, 'neuron_scatter'):
+                self.neuron_scatter._offsets3d = ([], [], [])
+            if hasattr(self, 'drop_scatter'):
+                self.drop_scatter._offsets3d = ([], [], [])
+            if hasattr(self, 'path_line'):
+                self.path_line.set_data([], [])
+                self.path_line.set_3d_properties([])
+            self.path_steps = []
+            self.all_drops = []
+            self.canvas.draw()
+        except Exception as e:
+            print(f"Error clearing visualization: {e}")
