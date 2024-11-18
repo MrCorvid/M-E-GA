@@ -23,8 +23,8 @@ class FitnessEvaluator:
         # Core reward parameters
         self.max_path_length = movement_rewards.get('max_path_length', 60)
         self.path_step_reward = movement_rewards.get('path_step_reward', 1.00)
-        self.pickup_reward = movement_rewards.get('pickup_reward', 0.0)
-        self.successful_drop_reward = movement_rewards.get('successful_drop_reward', 15.0)
+        self.pickup_reward = movement_rewards.get('pickup_reward', 0.5)
+        self.successful_drop_reward = movement_rewards.get('successful_drop_reward', 5.0)
         self.step_penalty = movement_rewards.get('step_penalty', -3.0)
 
         # For tracking
@@ -51,8 +51,9 @@ class FitnessEvaluator:
             # Get network connectivity (already 0-100)
             connectivity = self.evaluate_network_structure()
 
-
-            fitness = path_score * (connectivity **2)
+            # Final score is path_score * (connectivity/100)
+            # This makes connectivity act as a multiplier (0.0 - 1.0)
+            fitness = path_score ** (connectivity *.02)
 
             if self.debug:
                 self._print_debug_info(movement_results, path_score, connectivity, fitness)

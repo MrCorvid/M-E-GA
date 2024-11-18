@@ -7,16 +7,17 @@ from SP_NN import Position
 
 class NavigationSystem:
     # Command patterns (4-bit)
-    HEADING_X = 0b1001  # 1001 - X-Heading Change
+    HEADING_X = 0b1111  # 1111 - X-Heading Change
     HEADING_Y = 0b1110  # 1110 - Y-Heading Change
     HEADING_Z = 0b1100  # 1100 - Z-Heading Change
-    MOVE = 0b1000  # 1000 - Move
-    DROP = 0b1111  # 1111 - Drop
+    MOVE = 0b1000      # 1000 - Move
+    DROP = 0b1001      # 1001 - Drop
 
     def __init__(self, volume_size: float = 10.0):
         """Initialize navigation system with volume constraints."""
         self.volume_size = volume_size
-        self.current_pos = Position(0.0, 0.0, 0.0)
+        self.last_end_position = Position(0.0, 0.0, 0.0)
+        self.current_pos = self.last_end_position
         self.heading = np.array([1.0, 0.0, 0.0])  # Initial heading along x-axis
 
         # Command processing state
@@ -33,58 +34,41 @@ class NavigationSystem:
         self.MIN_MAGNITUDE_BITS = 6
         self.MAX_MAGNITUDE_BITS = 16
         self.PRECISION = 1e-6
-        self.CHUNK_SIZE = 1000  # Process 1000 digits at a time
+        self.CHUNK_SIZE = 1000
 
     def create_bit_stream(self, numbers: List[int]) -> str:
-        """
-        Convert list of integers into binary string, processing in chunks.
-        Args:
-            numbers: List of integers [0-9] to be processed
-        Returns:
-            Binary string representing the concatenated number
-        """
+        """Convert list of integers into binary string."""
         if not all(0 <= n <= 9 for n in numbers):
             raise ValueError("All numbers must be in range [0-9]")
 
-        # Process numbers in chunks to avoid integer overflow
         binary_result = []
         current_chunk = []
 
         for num in numbers:
             current_chunk.append(str(num))
             if len(current_chunk) >= self.CHUNK_SIZE:
-                # Convert chunk to binary
                 chunk_num = int(''.join(current_chunk))
-                chunk_binary = bin(chunk_num)[2:]  # Remove '0b' prefix
+                chunk_binary = bin(chunk_num)[2:]
                 binary_result.append(chunk_binary)
                 current_chunk = []
 
-        # Process any remaining numbers
         if current_chunk:
             chunk_num = int(''.join(current_chunk))
             chunk_binary = bin(chunk_num)[2:]
             binary_result.append(chunk_binary)
 
-        # Join all binary chunks
         return ''.join(binary_result)
 
     def process_command_stream(self, binary_str: str) -> List[Tuple[int, float]]:
-        """
-        Process binary string into commands and magnitudes.
-        Args:
-            binary_str: Binary string to process
-        Returns:
-            List of (command, magnitude) tuples
-        """
+        """Process binary string into commands and magnitudes."""
         commands = []
         bit_buffer = []
         magnitude_bits = []
         in_magnitude = False
         selector_bit = None
         command_count = 0
-        MAX_COMMANDS = 1000  # Limit total number of commands to prevent excessive paths
+        MAX_COMMANDS = 1000
 
-        # Process each bit in the stream
         for bit in binary_str:
             if command_count >= MAX_COMMANDS:
                 break
@@ -92,23 +76,19 @@ class NavigationSystem:
             bit = int(bit)
 
             if not in_magnitude:
-                # Building potential command
                 bit_buffer.append(bit)
 
                 if len(bit_buffer) == 4:
-                    # Check if we have a valid command
                     command = int(''.join(map(str, bit_buffer)), 2)
 
                     if command in [self.HEADING_X, self.HEADING_Y,
-                                   self.HEADING_Z, self.MOVE, self.DROP]:
-                        # Valid command found
+                                 self.HEADING_Z, self.MOVE, self.DROP]:
                         self.current_command = command
                         selector_bit = None
                         bit_buffer = []
                         in_magnitude = True
                         command_count += 1
                     else:
-                        # Not a valid command, shift window
                         bit_buffer = bit_buffer[1:]
 
             else:  # Processing magnitude
@@ -118,30 +98,25 @@ class NavigationSystem:
                 else:
                     magnitude_bits.append(bit)
 
-                    # Check if we have enough magnitude bits
                     min_bits = 8 if selector_bit else 6
                     if len(magnitude_bits) >= min_bits:
-                        # Look ahead for next command
                         if len(magnitude_bits) >= min_bits + 4:
                             potential_cmd = int(''.join(map(str, magnitude_bits[-4:])), 2)
 
                             if potential_cmd in [self.HEADING_X, self.HEADING_Y,
-                                                 self.HEADING_Z, self.MOVE, self.DROP]:
-                                # Process current magnitude and start new command
+                                               self.HEADING_Z, self.MOVE, self.DROP]:
                                 magnitude = self.calculate_magnitude(
                                     magnitude_bits[:-4],
                                     selector_bit
                                 )
                                 commands.append((self.current_command, magnitude))
 
-                                # Setup for next command
                                 self.current_command = potential_cmd
                                 in_magnitude = True
                                 selector_bit = None
                                 magnitude_bits = []
                                 continue
 
-        # Process final command if we have one
         if self.current_command is not None and magnitude_bits and command_count < MAX_COMMANDS:
             magnitude = self.calculate_magnitude(magnitude_bits, selector_bit)
             commands.append((self.current_command, magnitude))
@@ -153,19 +128,13 @@ class NavigationSystem:
         if not bits:
             return 0.0
 
-        # Convert bits to integer
         value = int(''.join(map(str, bits)), 2)
-
-        # Calculate normalization factor based on bit length
         norm_factor = (1 << len(bits)) - 1
         normalized = value / norm_factor
 
-        # Scale based on command type and selector
         if self.current_command in [self.HEADING_X, self.HEADING_Y, self.HEADING_Z]:
-            # Heading changes: Scale to degrees
             max_value = 360.0 if selector else 180.0
         else:
-            # Movement: Scale to volume size
             max_value = self.volume_size if selector else (self.volume_size / 2)
 
         return normalized * max_value
@@ -175,8 +144,8 @@ class NavigationSystem:
         if self.all_positions:
             last_pos = self.all_positions[-1]
             dist = np.sqrt((new_pos.x - last_pos.x) ** 2 +
-                           (new_pos.y - last_pos.y) ** 2 +
-                           (new_pos.z - last_pos.z) ** 2)
+                         (new_pos.y - last_pos.y) ** 2 +
+                         (new_pos.z - last_pos.z) ** 2)
             if is_move:
                 self.total_distance += dist
                 self.move_positions.append(new_pos)
@@ -185,12 +154,12 @@ class NavigationSystem:
 
     def execute_movement_sequence(self, numbers: List[int]) -> Dict:
         """Execute complete movement sequence from input numbers."""
-        # Reset state
         self.command_history = []
         self.total_distance = 0.0
         self.all_positions = []
         self.move_positions = []
-        command_positions = []  # Track position index for each command
+        command_positions = []
+        self.current_pos = self.last_end_position  # Start from last ending position
         self._update_path_metrics(self.current_pos)
         moves_made = drops_made = 0
 
@@ -221,6 +190,9 @@ class NavigationSystem:
                     command_positions.append(len(self.all_positions) - 1)
 
                 self.command_history.append((command, magnitude))
+
+            # Store final position for next sequence
+            self.last_end_position = self.current_pos
 
         except Exception as e:
             print(f"Error during movement sequence: {e}")
@@ -306,3 +278,9 @@ class NavigationSystem:
     def get_current_position(self) -> Position:
         """Get current position."""
         return self.current_pos
+
+    def reset_position(self):
+        """Reset the navigation system to origin."""
+        self.last_end_position = Position(0.0, 0.0, 0.0)
+        self.current_pos = self.last_end_position
+        self.heading = np.array([1.0, 0.0, 0.0])

@@ -14,7 +14,7 @@ class ExperimentRunner:
         self.config = {
             'network_params': {
                 # Core network structure
-                'volume_size': 40.0,
+                'volume_size': 30.0,
                 'num_input': 10,
                 'num_output': 20,
                 'total_neurons': 500,
@@ -35,7 +35,7 @@ class ExperimentRunner:
                 'activation_radius_factor': 0.2
             },
             'path_rewards': {
-                'max_path_length': 71,
+                'max_path_length': 70,
                 'path_step_reward': 1.0,
                 'pickup_reward': 0.0,
                 'successful_drop_reward': 15.0,
@@ -49,17 +49,17 @@ class ExperimentRunner:
         self.ga_config = {
             'mutation_prob': 0.15,
             'delimited_mutation_prob': 0.10,
-            'open_mutation_prob': 0.09,
+            'open_mutation_prob': 0.07,
             'capture_mutation_prob': 0.09,
             'delimiter_insert_prob': 0.04,
-            'delimit_delete_prob': 0.06,
+            'delimit_delete_prob': 0.01,
             'crossover_prob': 0.00,
             'elitism_ratio': 0.00,
-            'base_gene_prob': 0.25,
-            'capture_gene_prob': 0.02,
+            'base_gene_prob': 0.45,
+            'capture_gene_prob': 0.04,
             'max_individual_length': 50,
             'population_size': 600,
-            'num_parents': 400,
+            'num_parents': 300,
             'max_generations': 1000,
             'delimiters': False,
             'delimiter_space': 2,
