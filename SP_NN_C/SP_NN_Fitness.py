@@ -37,7 +37,7 @@ class NetworkEvolutionFitness:
             debug: bool = False
     ):
         """
-        Initialize Phase 1 fitness evaluation focusing on network connectivity structure.
+        Initialize Network Evolution Fitness focusing on spatial navigation and connectivity.
 
         Args:
             config (Dict[str, any]): Configuration dictionary containing all parameters.
@@ -70,14 +70,12 @@ class NetworkEvolutionFitness:
         # Initialize the spatial neural network
         self.network = create_network(self.network_params)
 
-        # Initialize path reward parameters
+        # Initialize path reward parameters with simplified rewards structure
         self.max_path_length = path_rewards.get('max_path_length', 60)
-        self.path_step_reward = path_rewards.get('path_step_reward', 1.00)
+        self.rotation_reward = path_rewards.get('rotation_reward', 0.5)
         self.pickup_reward = path_rewards.get('pickup_reward', 0.5)
         self.successful_drop_reward = path_rewards.get('successful_drop_reward', 5.0)
-        self.failed_drop_penalty = path_rewards.get('failed_drop_penalty', -0.0)
-        self.empty_bag_reward = path_rewards.get('empty_bag_reward', 10.00)
-        self.step_penalty = path_rewards.get('step_penalty', -10.0)
+        self.distance_penalty = path_rewards.get('distance_penalty', 0.1)
 
         # Debug and Update Function
         self.debug = debug
@@ -107,10 +105,16 @@ class NetworkEvolutionFitness:
             params=self.network_params
         )
 
-        # Initialize fitness evaluator
+        # Initialize fitness evaluator with simplified rewards
         self.evaluator = FitnessEvaluator(
             evolution_system=self.evolution,
-            movement_rewards=path_rewards,
+            movement_rewards={
+                'max_path_length': self.max_path_length,
+                'rotation_reward': self.rotation_reward,
+                'pickup_reward': self.pickup_reward,
+                'successful_drop_reward': self.successful_drop_reward,
+                'distance_penalty': self.distance_penalty
+            },
             debug=debug
         )
 
@@ -124,7 +128,7 @@ class NetworkEvolutionFitness:
 
     def compute(self, encoded_individual, ga_instance) -> float:
         """
-        Phase 1 fitness computation with network visualization at 100% connectivity.
+        Fitness computation with network visualization at 100% connectivity.
         Args:
             encoded_individual: The encoded genome representing the sequence of digits.
             ga_instance: The genetic algorithm instance.

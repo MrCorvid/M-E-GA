@@ -1,38 +1,45 @@
-from dataclasses import dataclass
-from collections import deque
-import numpy as np
-from typing import List, Dict, Tuple, Generator, Optional, Deque
 from SP_NN import Position
-
+import numpy as np
+from typing import List, Dict, Tuple, Deque
+from collections import deque
 
 class NavigationSystem:
     # Command patterns (4-bit)
-    HEADING_X = 0b1111  # 1111 - X-Heading Change
-    HEADING_Y = 0b1110  # 1110 - Y-Heading Change
-    HEADING_Z = 0b1100  # 1100 - Z-Heading Change
-    MOVE = 0b1000      # 1000 - Move
-    DROP = 0b1001      # 1001 - Drop
+    HEADING_X = 0b1111
+    HEADING_Y = 0b1110
+    HEADING_Z = 0b1100
+    MOVE = 0b1000
+    DROP = 0b1001
+
+    # Adjustable movement parameters
+    ROTATION_BITS = 12  # Adjust as needed
+    ROTATION_RANGE = 360.0  # degrees
+
+    MOVEMENT_BITS = 16
+    MOVEMENT_RANGE = None  # Will be set based on volume_size
 
     def __init__(self, volume_size: float = 10.0):
-        """Initialize navigation system with volume constraints."""
         self.volume_size = volume_size
+        self.MOVEMENT_RANGE = self.volume_size  # Directly use volume_size
+
         self.last_end_position = Position(0.0, 0.0, 0.0)
         self.current_pos = self.last_end_position
         self.heading = np.array([1.0, 0.0, 0.0])  # Initial heading along x-axis
 
         # Command processing state
         self.command_history = []
-        self.current_command = None
-        self.bit_accumulator = []
 
         # Path tracking
         self.total_distance = 0.0
         self.all_positions = []
         self.move_positions = []
 
+        # Simple command counters
+        self.moves_made = 0
+        self.drops_made = 0
+        self.rotations_made = 0
+
         # Constants for magnitude processing
-        self.MIN_MAGNITUDE_BITS = 6
-        self.MAX_MAGNITUDE_BITS = 16
         self.PRECISION = 1e-6
         self.CHUNK_SIZE = 1000
 
@@ -59,98 +66,92 @@ class NavigationSystem:
 
         return ''.join(binary_result)
 
-    def process_command_stream(self, binary_str: str) -> List[Tuple[int, float]]:
-        """Process binary string into commands and magnitudes."""
+    def process_command_stream(self, binary_str: str) -> List[Tuple[int, List[str]]]:
+        """Process binary string into commands and their data bits, discarding incomplete commands at the end."""
         commands = []
-        bit_buffer = []
-        magnitude_bits = []
-        in_magnitude = False
-        selector_bit = None
-        command_count = 0
-        MAX_COMMANDS = 1000
+        command_queue: Deque[Dict] = deque()
+        bit_buffer = 0
+        buffer_size = 0
+        i = 0
+        command_patterns = {
+            0b1000: self.MOVE,
+            0b1001: self.DROP,
+            0b1100: self.HEADING_Z,
+            0b1110: self.HEADING_Y,
+            0b1111: self.HEADING_X,
+        }
+        command_data_lengths = {
+            self.MOVE: self.MOVEMENT_BITS,
+            self.DROP: 0,
+            self.HEADING_X: self.ROTATION_BITS,
+            self.HEADING_Y: self.ROTATION_BITS,
+            self.HEADING_Z: self.ROTATION_BITS,
+        }
 
-        for bit in binary_str:
-            if command_count >= MAX_COMMANDS:
-                break
+        while i < len(binary_str):
+            bit = int(binary_str[i])
+            # Shift in new bit
+            bit_buffer = ((bit_buffer << 1) | bit) & 0b1111
+            buffer_size = min(buffer_size + 1, 4)
 
-            bit = int(bit)
+            # Check if bit_buffer matches any command pattern
+            command = command_patterns.get(bit_buffer) if buffer_size == 4 else None
+            if command is not None:
+                # Before adding the new command, add current bit to existing commands
+                for cmd in command_queue:
+                    cmd['data_bits'].append(str(bit))
+                # Check if oldest command is complete
+                if command_queue:
+                    oldest_cmd = command_queue[0]
+                    required_length = command_data_lengths[oldest_cmd['command']]
+                    if len(oldest_cmd['data_bits']) >= required_length:
+                        # Clip excess data
+                        data_bits = oldest_cmd['data_bits'][:required_length]
+                        commands.append((oldest_cmd['command'], data_bits))
+                        command_queue.popleft()
+                # Add new command to the queue
+                new_command = {
+                    'command': command,
+                    'data_bits': []
+                }
+                command_queue.append(new_command)
+                # Reset bit buffer
+                bit_buffer = 0
+                buffer_size = 0
+            else:
+                # Add bit as data to active commands
+                for cmd in command_queue:
+                    cmd['data_bits'].append(str(bit))
+                # Check if oldest command is complete
+                if command_queue:
+                    oldest_cmd = command_queue[0]
+                    required_length = command_data_lengths[oldest_cmd['command']]
+                    if len(oldest_cmd['data_bits']) >= required_length:
+                        # Clip excess data
+                        data_bits = oldest_cmd['data_bits'][:required_length]
+                        commands.append((oldest_cmd['command'], data_bits))
+                        command_queue.popleft()
+            i += 1
 
-            if not in_magnitude:
-                bit_buffer.append(bit)
-
-                if len(bit_buffer) == 4:
-                    command = int(''.join(map(str, bit_buffer)), 2)
-
-                    if command in [self.HEADING_X, self.HEADING_Y,
-                                 self.HEADING_Z, self.MOVE, self.DROP]:
-                        self.current_command = command
-                        selector_bit = None
-                        bit_buffer = []
-                        in_magnitude = True
-                        command_count += 1
-                    else:
-                        bit_buffer = bit_buffer[1:]
-
-            else:  # Processing magnitude
-                if selector_bit is None:
-                    selector_bit = bit
-                    magnitude_bits = []
-                else:
-                    magnitude_bits.append(bit)
-
-                    min_bits = 8 if selector_bit else 6
-                    if len(magnitude_bits) >= min_bits:
-                        if len(magnitude_bits) >= min_bits + 4:
-                            potential_cmd = int(''.join(map(str, magnitude_bits[-4:])), 2)
-
-                            if potential_cmd in [self.HEADING_X, self.HEADING_Y,
-                                               self.HEADING_Z, self.MOVE, self.DROP]:
-                                magnitude = self.calculate_magnitude(
-                                    magnitude_bits[:-4],
-                                    selector_bit
-                                )
-                                commands.append((self.current_command, magnitude))
-
-                                self.current_command = potential_cmd
-                                in_magnitude = True
-                                selector_bit = None
-                                magnitude_bits = []
-                                continue
-
-        if self.current_command is not None and magnitude_bits and command_count < MAX_COMMANDS:
-            magnitude = self.calculate_magnitude(magnitude_bits, selector_bit)
-            commands.append((self.current_command, magnitude))
-
+        # Discard any incomplete commands at the end of the bitstream
+        # Do not process remaining commands in the queue
         return commands
 
-    def calculate_magnitude(self, bits: List[int], selector: int) -> float:
-        """Calculate magnitude value from bits using selector bit."""
+    def calculate_magnitude(self, bits: List[str], command: int) -> float:
+        """Calculate magnitude value from bits."""
         if not bits:
             return 0.0
 
-        value = int(''.join(map(str, bits)), 2)
-        norm_factor = (1 << len(bits)) - 1
-        normalized = value / norm_factor
+        value = int(''.join(bits), 2)
+        max_value = (1 << len(bits)) - 1
+        normalized = value / max_value
 
-        if self.current_command in [self.HEADING_X, self.HEADING_Y, self.HEADING_Z]:
-            max_value = 360.0 if selector else 180.0
+        if command in [self.HEADING_X, self.HEADING_Y, self.HEADING_Z]:
+            return normalized * self.ROTATION_RANGE
+        elif command == self.MOVE:
+            return normalized * self.MOVEMENT_RANGE
         else:
-            max_value = self.volume_size if selector else (self.volume_size / 2)
-
-        return normalized * max_value
-
-    def _update_path_metrics(self, new_pos: Position, is_move: bool = False) -> None:
-        """Update path metrics with new position."""
-        if self.all_positions:
-            last_pos = self.all_positions[-1]
-            dist = np.sqrt((new_pos.x - last_pos.x) ** 2 +
-                         (new_pos.y - last_pos.y) ** 2 +
-                         (new_pos.z - last_pos.z) ** 2)
-            if is_move:
-                self.total_distance += dist
-                self.move_positions.append(new_pos)
-
-        self.all_positions.append(new_pos)
+            return 0.0
 
     def execute_movement_sequence(self, numbers: List[int]) -> Dict:
         """Execute complete movement sequence from input numbers."""
@@ -158,35 +159,34 @@ class NavigationSystem:
         self.total_distance = 0.0
         self.all_positions = []
         self.move_positions = []
+        self.moves_made = 0
+        self.drops_made = 0
+        self.rotations_made = 0
         command_positions = []
         self.current_pos = self.last_end_position  # Start from last ending position
         self._update_path_metrics(self.current_pos)
-        moves_made = drops_made = 0
 
         try:
             binary_str = self.create_bit_stream(numbers)
-            commands = self.process_command_stream(binary_str)
+            command_data_pairs = self.process_command_stream(binary_str)
 
-            for command, magnitude in commands:
+            for command, data_bits in command_data_pairs:
+                magnitude = self.calculate_magnitude(data_bits, command)
                 current_pos_index = len(self.all_positions) - 1
 
-                if command == self.HEADING_X:
-                    self.update_heading('x', magnitude)
-                    command_positions.append(current_pos_index)
-                elif command == self.HEADING_Y:
-                    self.update_heading('y', magnitude)
-                    command_positions.append(current_pos_index)
-                elif command == self.HEADING_Z:
-                    self.update_heading('z', magnitude)
+                if command in [self.HEADING_X, self.HEADING_Y, self.HEADING_Z]:
+                    axis = 'x' if command == self.HEADING_X else ('y' if command == self.HEADING_Y else 'z')
+                    self.update_heading(axis, magnitude)
+                    self.rotations_made += 1
                     command_positions.append(current_pos_index)
                 elif command == self.MOVE:
                     new_pos = self.move(magnitude)
                     self._update_path_metrics(new_pos, is_move=True)
-                    moves_made += 1
+                    self.moves_made += 1
                     command_positions.append(len(self.all_positions) - 1)
                 elif command == self.DROP:
                     self._update_path_metrics(self.current_pos)
-                    drops_made += 1
+                    self.drops_made += 1
                     command_positions.append(len(self.all_positions) - 1)
 
                 self.command_history.append((command, magnitude))
@@ -202,13 +202,27 @@ class NavigationSystem:
             'positions': self.all_positions,
             'move_positions': self.move_positions,
             'path_length': self.total_distance,
-            'moves_made': moves_made,
-            'drops_made': drops_made,
+            'moves_made': self.moves_made,
+            'drops_made': self.drops_made,
+            'rotations_made': self.rotations_made,
             'commands_executed': len(self.command_history),
             'command_history': self.command_history,
             'command_positions': command_positions,
-            'final_position': self.current_pos
+            'final_position': self.current_pos,
         }
+
+    def _update_path_metrics(self, new_pos: Position, is_move: bool = False) -> None:
+        """Update path metrics with new position."""
+        if self.all_positions:
+            last_pos = self.all_positions[-1]
+            dist = np.sqrt((new_pos.x - last_pos.x) ** 2 +
+                           (new_pos.y - last_pos.y) ** 2 +
+                           (new_pos.z - last_pos.z) ** 2)
+            if is_move:
+                self.total_distance += dist
+                self.move_positions.append(new_pos)
+
+        self.all_positions.append(new_pos)
 
     def _create_error_result(self) -> Dict:
         """Create a safe error result."""
@@ -218,10 +232,11 @@ class NavigationSystem:
             'path_length': 0.0,
             'moves_made': 0,
             'drops_made': 0,
+            'rotations_made': 0,
             'commands_executed': 0,
             'command_history': [],
             'command_positions': [],
-            'final_position': self.current_pos
+            'final_position': self.current_pos,
         }
 
     def update_heading(self, axis: str, angle: float):
@@ -251,7 +266,7 @@ class NavigationSystem:
         self.heading = self.heading / np.linalg.norm(self.heading)
 
     def move(self, distance: float) -> Position:
-        """Move along current heading vector."""
+        """Move along current heading vector without constraints."""
         movement = self.heading * distance
         new_pos = Position(
             x=self.current_pos.x + movement[0],
@@ -266,8 +281,7 @@ class NavigationSystem:
         half_size = self.volume_size / 2
 
         def wrap_coordinate(coord: float) -> float:
-            wrapped = ((coord + half_size) % self.volume_size) - half_size
-            return round(wrapped, 6)
+            return ((coord + half_size) % self.volume_size) - half_size
 
         return Position(
             x=wrap_coordinate(pos.x),

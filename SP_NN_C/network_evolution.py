@@ -10,7 +10,7 @@ from scipy.spatial import KDTree
 
 
 class NetworkEvolution:
-    AGENT_RADIUS = 3.00  # Interaction radius for agent
+    AGENT_RADIUS = 2.00  # Interaction radius for agent
     MAX_PICKUP_BAG = 500  # Maximum neurons we can carry at once
 
     def __init__(
@@ -53,9 +53,10 @@ class NetworkEvolution:
                 self.monitor.clear_path()
                 self.monitor.update_path_step(self.navigator.current_pos)
 
-            # Reset state
+            # Initialize state
             self.pickup_bag.clear()
-            self.navigator.current_pos = Position(0.0, 0.0, 0.0)
+            self.navigator.reset_position()
+            successful_pickups = 0  # Track actual successful pickups
 
             # Get current network state
             state = self.network.get_network_state()
@@ -67,13 +68,6 @@ class NetworkEvolution:
             positions = results['positions']
             command_history = results['command_history']
             command_positions = results['command_positions']
-
-            # Tracking metrics
-            moves_made = results['moves_made']
-            successful_drops = 0
-            failed_drops = 0
-            neurons_moved = 0
-            pickups_made = 0
 
             # Create initial KD-tree for efficient neighbor searching
             available_neurons = [
@@ -101,7 +95,7 @@ class NetworkEvolution:
                     # Query for nearby neurons
                     nearby_indices = tree.query_ball_point(
                         [current_pos.x, current_pos.y, current_pos.z],
-                        self.AGENT_RADIUS   # Increased radius for better detection
+                        self.AGENT_RADIUS
                     )
 
                     for idx in nearby_indices:
@@ -111,11 +105,10 @@ class NetworkEvolution:
                         nid = neuron_ids[idx]
                         if nid not in self.pickup_bag and nid not in position_updates:
                             self.pickup_bag.append(nid)
-                            pickups_made += 1
+                            successful_pickups += 1  # Increment counter for actual pickups
 
                     # Update available neurons if any were picked up
                     if nearby_indices:
-                        # Create mask for remaining neurons
                         mask = np.ones(len(neuron_ids), dtype=bool)
                         for idx in nearby_indices:
                             mask[idx] = False
@@ -127,7 +120,7 @@ class NetworkEvolution:
                         else:
                             available_neurons = []
 
-                # Handle single drop per DROP command
+                # Handle DROP command
                 if command == self.navigator.DROP and self.pickup_bag:
                     heading = self.navigator.heading
                     drop_pos = Position(
@@ -148,13 +141,9 @@ class NetworkEvolution:
                     if position_clear:
                         neuron_id = self.pickup_bag.popleft()  # FIFO order
                         position_updates[neuron_id] = (drop_pos.x, drop_pos.y, drop_pos.z)
-                        neurons_moved += 1
-                        successful_drops += 1
 
                         if should_visualize:
                             self.monitor.update_drop_locations([drop_pos])
-                    else:
-                        failed_drops += 1
 
                 # Update visualization
                 if should_visualize:
@@ -170,17 +159,19 @@ class NetworkEvolution:
                 time.sleep(0.1)
                 self.monitor.clear_drops()
 
+            # Return comprehensive results
             return {
-                'moves_made': moves_made,
-                'pickups_made': pickups_made,
-                'successful_drops': successful_drops,
-                'failed_drops': failed_drops,
-                'neurons_moved': neurons_moved,
+                'moves_made': results['moves_made'],
+                'pickups_made': successful_pickups,  # Use actual pickup counter
+                'successful_drops': results['drops_made'],
+                'neurons_moved': len(position_updates),
+                'rotations_made': results['rotations_made'],
                 'total_neurons': len(self.network.neurons),
                 'pickup_bag_size': len(self.pickup_bag),
                 'total_steps': len(positions),
                 'commands_executed': len(command_history),
-                'positions': positions
+                'positions': positions,
+                'path_length': results.get('path_length', 0)  # Include path length for fitness calculation
             }
 
         except Exception as e:
@@ -195,13 +186,14 @@ class NetworkEvolution:
                 'moves_made': 0,
                 'pickups_made': 0,
                 'successful_drops': 0,
-                'failed_drops': 0,
                 'neurons_moved': 0,
+                'rotations_made': 0,
                 'total_neurons': len(self.network.neurons),
                 'pickup_bag_size': len(self.pickup_bag),
                 'total_steps': 0,
                 'commands_executed': 0,
-                'positions': [self.navigator.current_pos]
+                'positions': [self.navigator.current_pos],
+                'path_length': 0
             }
 
     def calculate_connectivity(self) -> float:
