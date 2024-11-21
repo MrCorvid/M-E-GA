@@ -25,7 +25,7 @@ class FitnessEvaluator:
         self.rotation_reward = movement_rewards.get('rotation_reward', 0.2)
         self.pickup_reward = movement_rewards.get('pickup_reward', 0.0)
         self.successful_drop_reward = movement_rewards.get('successful_drop_reward', 5.0)
-        self.distance_penalty = movement_rewards.get('distance_penalty', 2.)
+        self.distance_penalty = movement_rewards.get('distance_penalty', 2.0)
 
         # For tracking
         self.current_generation = 0
@@ -51,8 +51,7 @@ class FitnessEvaluator:
             # Get network connectivity (0-100)
             connectivity = self.evaluate_network_structure()
 
-            # Final score = path_score * (connectivity/100)^2
-            final_score = path_score * (connectivity) ** 2
+            final_score = path_score ** (connectivity)
 
             if self.debug:
                 self._print_debug_info(results, path_score, connectivity, final_score)
@@ -82,7 +81,8 @@ class FitnessEvaluator:
         else:
             score += self.max_path_length
             excess_distance = total_distance - self.max_path_length
-            score -= excess_distance * self.distance_penalty
+            penalty = (excess_distance ** 2) * self.distance_penalty
+            score -= penalty
 
         return score
 
@@ -125,9 +125,9 @@ class FitnessEvaluator:
 
         if results['path_length'] > self.max_path_length:
             excess = results['path_length'] - self.max_path_length
-            penalty = excess * self.distance_penalty
+            penalty = (excess ** 2) * self.distance_penalty
             print(f"Excess Distance: {excess:.2f}")
-            print(f"Distance Penalty: -{penalty:.2f}")
+            print(f"Quadratic Distance Penalty: -{penalty:.2f}")
 
         print(f"Raw Path Score: {path_score:.2f}")
         print(f"Network Connectivity: {connectivity:.1f}%")

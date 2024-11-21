@@ -10,7 +10,7 @@ from scipy.spatial import KDTree
 
 
 class NetworkEvolution:
-    AGENT_RADIUS = 2.00  # Interaction radius for agent
+    AGENT_RADIUS = 1.5  # Interaction radius for agent
     MAX_PICKUP_BAG = 500  # Maximum neurons we can carry at once
 
     def __init__(

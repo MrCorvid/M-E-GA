@@ -14,15 +14,15 @@ class ExperimentRunner:
         self.config = {
             'network_params': {
                 # Core network structure
-                'volume_size': 30.0,
+                'volume_size': 55.0,
                 'num_input': 10,
                 'num_output': 20,
                 'total_neurons': 500,
 
                 # Neuron radius parameters
-                'max_radius': 3.0,
+                'max_radius': 4.0,
                 'min_radius': .50,
-                'hidden_radius_range': (.15, 1.0),
+                'hidden_radius_range': (.50, 1.0),
                 'base_radius_shrink_rate': 0.95,
                 'input_radius_factor': 1.0,
                 'interface_radius_factor': 1.0,
@@ -35,11 +35,11 @@ class ExperimentRunner:
                 'activation_radius_factor': 0.2
             },
             'path_rewards': {
-                'max_path_length': 400,
-                'rotation_reward': 0.5,
+                'max_path_length': 1000,
+                'rotation_reward': 0.0,
                 'pickup_reward': 5.0,
-                'successful_drop_reward': 15.0,
-                'distance_penalty': 2.0
+                'successful_drop_reward': 0.0,
+                'distance_penalty': 130.0
             }
         }
 
@@ -47,17 +47,17 @@ class ExperimentRunner:
         self.ga_config = {
             'mutation_prob': 0.15,
             'delimited_mutation_prob': 0.10,
-            'open_mutation_prob': 0.1,
-            'capture_mutation_prob': 0.07,
-            'delimiter_insert_prob': 0.04,
-            'delimit_delete_prob': 0.00,
+            'open_mutation_prob': 0.06,
+            'capture_mutation_prob': 0.03,
+            'delimiter_insert_prob': 0.05,
+            'delimit_delete_prob': 0.03,
             'crossover_prob': 0.00,
             'elitism_ratio': 0.00,
-            'base_gene_prob': 0.45,
-            'capture_gene_prob': 0.05,
-            'max_individual_length': 50,
+            'base_gene_prob': 0.50,
+            'capture_gene_prob': 0.01,
+            'max_individual_length': 20,
             'population_size': 700,
-            'num_parents': 500,
+            'num_parents': 300,
             'max_generations': 1000,
             'delimiters': False,
             'delimiter_space': 2,
