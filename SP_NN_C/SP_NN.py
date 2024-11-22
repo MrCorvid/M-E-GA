@@ -356,33 +356,78 @@ class SpatialNeuralNetwork:
                 'remaining_budget': self.params.activation_budget - self.window_activations
             }
 
-    def compute_connectivity_score(self) -> float:
+    def compute_connection_density(self) -> float:
         """
-        Computes the connectivity score of neurons using component counting.
-        The score ranges from 0 to 100:
-            - 0 indicates low connectivity (high fragmentation).
-            - 100 indicates full connectivity (single connected component).
-
+        Computes connection density using validated mathematical framework,
+        focusing only on hidden neurons to measure emergent connectivity patterns.
+        
+        Density = (E_actual × R_max³) / (E_fully_connected × (R_max_actual³ - R_min_actual³)) × 100
+        
         Returns:
-            float: Connectivity score between 0 and 100.
+            float: Score from 0-100% indicating density relative to theoretical maximum
+        """
+        with self.neuron_lock:
+            # Filter for hidden neurons only, excluding interface neurons
+            hidden_neurons = [n for n in self.neurons.values() 
+                             if n.type == NeuronType.HIDDEN and 
+                             n in self.hidden_neurons and 
+                             n not in self.interface_neurons]
+            
+            if not hidden_neurons:
+                return 0.0
+            
+            # Count actual connections between hidden neurons
+            E_actual = sum(len([c for c in n.connections 
+                               if c in hidden_neurons])  # Only count connections to other hidden neurons
+                           for n in hidden_neurons)
+            
+            # Get radius values for hidden neurons only
+            radii = [n.radius for n in hidden_neurons if n.radius > 0]
+            if not radii:
+                return 0.0
+                
+            R_max = self.params.max_radius
+            R_max_actual = max(radii)
+            R_min_actual = min(radii)
+            
+            # Calculate fully connected potential for hidden neurons only
+            N = len(hidden_neurons)
+            E_fully_connected = N * (N-1)  # Directed graph maximum
+            
+            # Apply validated formula
+            try:
+                density = (E_actual * R_max**3) / (E_fully_connected * 
+                          (R_max_actual**3 - R_min_actual**3)) * 100
+                return max(0.0, min(density, 100.0))
+            except ZeroDivisionError:
+                return 0.0
+    
+    def compute_structural_connectivity(self) -> float:
+        """
+        Computes structural connectivity using component counting via Union-Find algorithm.
+        Measures how well neurons form connected groups in the network topology.
+        
+        Returns:
+            float: Score from 0-100% indicating structural connectivity:
+                   - 100%: Single fully connected component
+                   - 0%: Every neuron is isolated
         """
         with self.neuron_lock:
             N = len(self.neurons)
             if N <= 1:
-                # If there are 0 or 1 neurons, the network is trivially fully connected
-                return 100.0
-
-            # Initialize Union-Find (Disjoint Set Union) structure
+                return 100.0  # Trivially connected for 0 or 1 neurons
+    
+            # Initialize Union-Find data structure
             parent = {neuron.id: neuron.id for neuron in self.neurons.values()}
             rank = {neuron.id: 0 for neuron in self.neurons.values()}
-
+    
             def find(x):
                 """Finds the root parent of x with path compression."""
                 while parent[x] != x:
                     parent[x] = parent[parent[x]]  # Path compression
                     x = parent[x]
                 return x
-
+    
             def union(x, y):
                 """Unites the sets containing x and y using union by rank."""
                 root_x = find(x)
@@ -395,27 +440,64 @@ class SpatialNeuralNetwork:
                     parent[root_y] = root_x
                     if rank[root_x] == rank[root_y]:
                         rank[root_x] += 1
-
-            # Union neurons based on connections
+    
+            # Build connected components via neuron connections
             for neuron in self.neurons.values():
                 neuron_id = neuron.id
                 for target in neuron.connections:
                     union(neuron_id, target.id)
-
+    
             # Count unique connected components
             unique_roots = set(find(x) for x in parent)
             C = len(unique_roots)
-
+    
             # Calculate connectivity score
-            # Formula: ((N - C) / (N - 1)) * 100
-            # - C = 1 (fully connected): ((N - 1) / (N - 1)) * 100 = 100%
-            # - C = N (fully disconnected): ((0) / (N - 1)) * 100 = 0%
+            # ((N - C) / (N - 1)) * 100 gives us:
+            # - N components (fully disconnected) = 0%
+            # - 1 component (fully connected) = 100%
             score = ((N - C) / (N - 1)) * 100
+    
+            return max(0.0, min(score, 100.0))  # Ensure score is in [0,100]
 
-            # Clamp the score to ensure it's within [0, 100]
-            score = max(0.0, min(score, 100.0))
-
-            return score
+    def compute_network_health(self) -> dict:
+        """
+        Computes comprehensive network health metrics combining structural
+        connectivity and connection density scores.
+        
+        Returns:
+            dict: Contains:
+                - structural_connectivity: Raw structural score (0-100%)
+                - connection_density: Raw density score (0-100%)
+                - combined_health: Weighted combination with internal margin
+                - metadata: Weight and margin information
+        """
+        # Calculate raw metrics
+        structural = self.compute_structural_connectivity()
+        density = self.compute_connection_density()
+        
+        # Apply margin to density
+        DENSITY_MARGIN = 10.0
+        adjusted_density = max(0.0, density - DENSITY_MARGIN)
+        
+        # Calculate weighted combination
+        STRUCTURAL_WEIGHT = 0.60
+        DENSITY_WEIGHT = 0.40
+        
+        combined_health = (STRUCTURAL_WEIGHT * structural + 
+                          DENSITY_WEIGHT * adjusted_density)
+        
+        return {
+            'structural_connectivity': structural,
+            'connection_density': density,
+            'combined_health': combined_health,
+            'metadata': {
+                'density_margin': DENSITY_MARGIN,
+                'structural_weight': STRUCTURAL_WEIGHT,
+                'density_weight': DENSITY_WEIGHT,
+                'raw_density': density,
+                'adjusted_density': adjusted_density
+            }
+        }
 
 
 def plot_network_with_weights(network: SpatialNeuralNetwork):
