@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from mpl_toolkits.mplot3d import Axes3D
 import numpy as np
-from SP_NN import Position, NeuronType
+from dataclasses import dataclass
 
 
 class NetworkMonitor:
@@ -40,27 +40,58 @@ class NetworkMonitor:
             self.frame = ttk.Frame(self.root, padding="10")
             self.frame.pack(expand=True, fill=tk.BOTH)
 
-            # Connectivity display
-            self.connectivity_frame = ttk.LabelFrame(self.frame, text="Network Status", padding="5")
-            self.connectivity_frame.pack(fill=tk.X, pady=5)
+            # Network Health Metrics Frame
+            self.health_frame = ttk.LabelFrame(self.frame, text="Network Health Metrics", padding="5")
+            self.health_frame.pack(fill=tk.X, pady=5)
 
-            self.connectivity_label = ttk.Label(
-                self.connectivity_frame,
-                text="Network Connectivity: 0%",
-                font=('Arial', 12, 'bold')
+            # Structural Connectivity
+            self.structural_label = ttk.Label(
+                self.health_frame,
+                text="Structural Connectivity: 0%",
+                font=('Arial', 10)
             )
-            self.connectivity_label.pack(pady=5)
-
-            self.progress = ttk.Progressbar(
-                self.connectivity_frame,
+            self.structural_label.pack(pady=2)
+            self.structural_progress = ttk.Progressbar(
+                self.health_frame,
                 length=400,
                 mode='determinate',
                 maximum=100
             )
-            self.progress.pack(pady=5)
+            self.structural_progress.pack(pady=2)
 
+            # Connection Density
+            self.density_label = ttk.Label(
+                self.health_frame,
+                text="Connection Density: 0%",
+                font=('Arial', 10)
+            )
+            self.density_label.pack(pady=2)
+            self.density_progress = ttk.Progressbar(
+                self.health_frame,
+                length=400,
+                mode='determinate',
+                maximum=100
+            )
+            self.density_progress.pack(pady=2)
+
+            # Combined Health
+            self.combined_label = ttk.Label(
+                self.health_frame,
+                text="Combined Health: 0%",
+                font=('Arial', 12, 'bold')
+            )
+            self.combined_label.pack(pady=2)
+            self.combined_progress = ttk.Progressbar(
+                self.health_frame,
+                length=400,
+                mode='determinate',
+                maximum=100
+            )
+            self.combined_progress.pack(pady=2)
+
+            # Status Label
             self.status_label = ttk.Label(
-                self.connectivity_frame,
+                self.health_frame,
                 text="Status: Initializing...",
                 font=('Arial', 10)
             )
@@ -79,28 +110,8 @@ class NetworkMonitor:
             )
             self.visualization_check.pack(pady=5)
 
-            # 3D Plot
-            self.fig = plt.Figure(figsize=(8, 8))
-            self.ax = self.fig.add_subplot(111, projection='3d')
-
-            half_volume = self.volume_size / 2
-            self.ax.set_xlim(-half_volume, half_volume)
-            self.ax.set_ylim(-half_volume, half_volume)
-            self.ax.set_zlim(-half_volume, half_volume)
-
-            self.ax.set_xlabel('X')
-            self.ax.set_ylabel('Y')
-            self.ax.set_zlabel('Z')
-            self.ax.set_title('Neural Network Structure')
-
-            # Initialize plots
-            self.neuron_scatter = self.ax.scatter([], [], [], c='b', marker='o', s=50)
-            self.drop_scatter = self.ax.scatter([], [], [], c='r', marker='^', s=100)
-            self.path_line, = self.ax.plot([], [], [], c='g', linewidth=2)
-
-            self.canvas = FigureCanvasTkAgg(self.fig, master=self.frame)
-            self.canvas.draw()
-            self.canvas.get_tk_widget().pack(expand=True, fill=tk.BOTH)
+            # 3D Plot setup
+            self.setup_3d_plot()
 
             # Start queue checker
             self.check_queue()
@@ -108,6 +119,30 @@ class NetworkMonitor:
 
         except Exception as e:
             print(f"Error creating monitor window: {e}")
+
+    def setup_3d_plot(self):
+        """Setup the 3D visualization plot"""
+        self.fig = plt.Figure(figsize=(8, 8))
+        self.ax = self.fig.add_subplot(111, projection='3d')
+
+        half_volume = self.volume_size / 2
+        self.ax.set_xlim(-half_volume, half_volume)
+        self.ax.set_ylim(-half_volume, half_volume)
+        self.ax.set_zlim(-half_volume, half_volume)
+
+        self.ax.set_xlabel('X')
+        self.ax.set_ylabel('Y')
+        self.ax.set_zlabel('Z')
+        self.ax.set_title('Neural Network Structure')
+
+        # Initialize plots
+        self.neuron_scatter = self.ax.scatter([], [], [], c='b', marker='o', s=50)
+        self.drop_scatter = self.ax.scatter([], [], [], c='r', marker='^', s=100)
+        self.path_line, = self.ax.plot([], [], [], c='g', linewidth=2)
+
+        self.canvas = FigureCanvasTkAgg(self.fig, master=self.frame)
+        self.canvas.draw()
+        self.canvas.get_tk_widget().pack(expand=True, fill=tk.BOTH)
 
     def check_queue(self):
         """Process messages from the queue"""
@@ -123,12 +158,12 @@ class NetworkMonitor:
         except Exception as e:
             print(f"Error checking queue: {e}")
 
-    def update_connectivity(self, value: float):
-        """Update connectivity display - always process regardless of visualization state"""
+    def update_health_metrics(self, metrics: dict):
+        """Update all health metrics displays"""
         try:
-            self.queue.put({'type': 'connectivity', 'value': value})
+            self.queue.put({'type': 'health_metrics', 'data': metrics})
         except Exception as e:
-            print(f"Error updating connectivity: {e}")
+            print(f"Error updating health metrics: {e}")
 
     def update_neuron_positions(self, neurons: dict):
         """Update neuron positions - only if visualization is enabled"""
@@ -146,7 +181,7 @@ class NetworkMonitor:
             except Exception as e:
                 print(f"Error updating drops: {e}")
 
-    def update_path_step(self, position: Position):
+    def update_path_step(self, position):
         """Update path visualization - only if visualization is enabled"""
         if self.visualization_enabled:
             try:
@@ -175,7 +210,6 @@ class NetworkMonitor:
         """Toggle real-time visualization updates"""
         self.visualization_enabled = self.visualization_var.get()
         if not self.visualization_enabled:
-            # Clear visualization when disabled
             self._clear_visualization()
 
     def _handle_message(self, message: dict):
@@ -183,9 +217,9 @@ class NetworkMonitor:
         try:
             message_type = message.get('type')
 
-            # Always process connectivity updates
-            if message_type == 'connectivity':
-                self._update_connectivity_display(message.get('value'))
+            # Handle health metrics update
+            if message_type == 'health_metrics':
+                self._update_health_metrics_display(message.get('data'))
             # Only process visualization updates if enabled
             elif self.visualization_enabled:
                 if message_type == 'neurons':
@@ -202,45 +236,49 @@ class NetworkMonitor:
         except Exception as e:
             print(f"Error handling message: {e}")
 
-    def _update_connectivity_display(self, value: float):
-        """Update connectivity GUI elements"""
+    def _update_health_metrics_display(self, metrics: dict):
+        """Update the display for all health metrics"""
         try:
-            self.connectivity_label.config(text=f"Network Connectivity: {value:.1f}%")
-            self.progress['value'] = value
+            structural = metrics.get('structural_connectivity', 0)
+            density = metrics.get('connection_density', 0)
+            combined = metrics.get('combined_health', 0)
 
-            if value >= 70:
+            # Update structural connectivity
+            self.structural_label.config(text=f"Structural Connectivity: {structural:.1f}%")
+            self.structural_progress['value'] = structural
+
+            # Update connection density
+            self.density_label.config(text=f"Connection Density: {density:.1f}%")
+            self.density_progress['value'] = density
+
+            # Update combined health
+            self.combined_label.config(text=f"Combined Health: {combined:.1f}%")
+            self.combined_progress['value'] = combined
+
+            # Update status based on combined health
+            if combined >= 70:
                 status, color = "Good", "green"
-            elif value >= 30:
+            elif combined >= 30:
                 status, color = "Improving", "orange"
             else:
                 status, color = "Poor", "red"
 
             self.status_label.config(text=f"Status: {status}", foreground=color)
+
         except Exception as e:
-            print(f"Error updating connectivity display: {e}")
+            print(f"Error updating health metrics display: {e}")
 
     def _update_neuron_positions_display(self, neurons: dict):
         """Update neuron positions in 3D plot"""
         try:
-            xs, ys, zs, colors = [], [], [], []
+            xs, ys, zs = [], [], []
             for nid, data in neurons.items():
                 pos = data['position']
-                neuron_type = data['type']
                 xs.append(pos[0])
                 ys.append(pos[1])
                 zs.append(pos[2])
 
-                if neuron_type == NeuronType.INPUT.value:
-                    colors.append('green')
-                elif neuron_type == NeuronType.OUTPUT.value:
-                    colors.append('blue')
-                elif neuron_type == NeuronType.HIDDEN.value:
-                    colors.append('purple')
-                else:
-                    colors.append('gray')
-
             self.neuron_scatter._offsets3d = (xs, ys, zs)
-            self.neuron_scatter.set_color(colors)
             self.canvas.draw()
         except Exception as e:
             print(f"Error updating neuron positions: {e}")
@@ -260,7 +298,7 @@ class NetworkMonitor:
         except Exception as e:
             print(f"Error updating drop locations: {e}")
 
-    def _update_path_display(self, position: Position):
+    def _update_path_display(self, position):
         """Update path visualization"""
         try:
             new_pos = (position.x, position.y, position.z)
@@ -285,7 +323,7 @@ class NetworkMonitor:
             print(f"Error clearing drops: {e}")
 
     def _clear_visualization(self):
-        """Clear all visualization elements but keep connectivity display"""
+        """Clear all visualization elements"""
         try:
             if hasattr(self, 'neuron_scatter'):
                 self.neuron_scatter._offsets3d = ([], [], [])
