@@ -48,8 +48,9 @@ class FitnessEvaluator:
             # Calculate raw path score
             path_score = self.evaluate_path_execution(results)
 
-            # Get network health metrics
-            health_metrics = self.evolution_system._get_network_health()
+            # Get network health metrics - Using correct method name
+            network_stats = self.evolution_system.get_network_stats()
+            health_metrics = network_stats['health_metrics']
             
             # Get combined health score (already includes both structural and density)
             combined_health = health_metrics['combined_health']
@@ -57,7 +58,7 @@ class FitnessEvaluator:
             # Store connectivity for tracking
             self._last_connectivity = health_metrics['structural_connectivity']
             
-            # Update monitor connectivity if monitor exists
+            # Update monitor if exists
             if self.evolution_system.monitor:
                 self.evolution_system.monitor.update_health_metrics(health_metrics)
 
@@ -98,8 +99,9 @@ class FitnessEvaluator:
 
     def evaluate_network_structure(self) -> float:
         """Get network connectivity score (0-100)."""
-        # Get complete health metrics
-        health_metrics = self.evolution_system._get_network_health()
+        # Get complete health metrics using correct method
+        network_stats = self.evolution_system.get_network_stats()
+        health_metrics = network_stats['health_metrics']
         return health_metrics['combined_health']
 
     def get_stats(self) -> Dict:
