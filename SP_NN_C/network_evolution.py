@@ -10,7 +10,7 @@ from scipy.spatial import KDTree
 
 
 class NetworkEvolution:
-    AGENT_RADIUS = 1.5  # Interaction radius for agent
+    AGENT_RADIUS = 2.00  # Interaction radius for agent
     MAX_PICKUP_BAG = 500  # Maximum neurons we can carry at once
 
     def __init__(
@@ -38,6 +38,7 @@ class NetworkEvolution:
         self.pickup_bag = deque(maxlen=self.MAX_PICKUP_BAG)  # FIFO queue for pickups
         self.processed_neurons = set()
         self.last_command_time = 0
+        self._last_health_metrics = None
 
         # Start background updates if monitor exists
         if self.monitor:
@@ -53,10 +54,9 @@ class NetworkEvolution:
                 self.monitor.clear_path()
                 self.monitor.update_path_step(self.navigator.current_pos)
 
-            # Initialize state
+            # Reset state
             self.pickup_bag.clear()
             self.navigator.reset_position()
-            successful_pickups = 0  # Track actual successful pickups
 
             # Get current network state
             state = self.network.get_network_state()
@@ -105,10 +105,10 @@ class NetworkEvolution:
                         nid = neuron_ids[idx]
                         if nid not in self.pickup_bag and nid not in position_updates:
                             self.pickup_bag.append(nid)
-                            successful_pickups += 1  # Increment counter for actual pickups
 
                     # Update available neurons if any were picked up
                     if nearby_indices:
+                        # Create mask for remaining neurons
                         mask = np.ones(len(neuron_ids), dtype=bool)
                         for idx in nearby_indices:
                             mask[idx] = False
@@ -150,9 +150,10 @@ class NetworkEvolution:
                     self.monitor.update_path_step(current_pos)
                     time.sleep(0.05)
 
-            # Apply position updates
+            # Apply position updates and update network health
             if position_updates:
                 self.network.update_neuron_positions(position_updates)
+                self._update_network_health()
 
             # Clear visualization after execution
             if should_visualize:
@@ -162,8 +163,9 @@ class NetworkEvolution:
             # Return comprehensive results
             return {
                 'moves_made': results['moves_made'],
-                'pickups_made': successful_pickups,  # Use actual pickup counter
+                'pickups_made': len(results['move_positions']),
                 'successful_drops': results['drops_made'],
+                'failed_drops': 0,  # Maintained for compatibility
                 'neurons_moved': len(position_updates),
                 'rotations_made': results['rotations_made'],
                 'total_neurons': len(self.network.neurons),
@@ -171,7 +173,7 @@ class NetworkEvolution:
                 'total_steps': len(positions),
                 'commands_executed': len(command_history),
                 'positions': positions,
-                'path_length': results.get('path_length', 0)  # Include path length for fitness calculation
+                'network_health': self._last_health_metrics
             }
 
         except Exception as e:
@@ -186,6 +188,7 @@ class NetworkEvolution:
                 'moves_made': 0,
                 'pickups_made': 0,
                 'successful_drops': 0,
+                'failed_drops': 0,
                 'neurons_moved': 0,
                 'rotations_made': 0,
                 'total_neurons': len(self.network.neurons),
@@ -193,45 +196,48 @@ class NetworkEvolution:
                 'total_steps': 0,
                 'commands_executed': 0,
                 'positions': [self.navigator.current_pos],
-                'path_length': 0
+                'network_health': self._get_network_health()
             }
 
-    def calculate_connectivity(self) -> float:
-        """Calculate current network connectivity"""
-        return self.network.compute_connectivity_score()
+    def _get_network_health(self) -> dict:
+        """Get current network health metrics"""
+        return self.network.compute_network_health()
 
-    def update_monitor_connectivity(self, value: float):
-        """Update monitor with current connectivity"""
+    def _update_network_health(self):
+        """Update network health metrics and monitor"""
+        self._last_health_metrics = self._get_network_health()
         if self.monitor:
-            self.monitor.update_connectivity(value)
+            self.monitor.update_health_metrics(self._last_health_metrics)
 
     def get_network_stats(self) -> Dict:
         """Get current network statistics"""
         state = self.network.get_network_state()
-        state['connectivity'] = self.calculate_connectivity()
-        state['pickup_bag_size'] = len(self.pickup_bag)
+        health_metrics = self._get_network_health()
+        state.update({
+            'health_metrics': health_metrics,
+            'pickup_bag_size': len(self.pickup_bag)
+        })
         return state
 
     def get_current_state(self) -> Dict:
         """Get current evolution state"""
+        health_metrics = self._get_network_health()
         return {
             'pickup_bag_size': len(self.pickup_bag),
             'processed_neurons': len(self.processed_neurons),
             'current_position': self.navigator.get_current_position(),
-            'connectivity': self.calculate_connectivity()
+            'health_metrics': health_metrics
         }
 
     def _start_background_updates(self, update_interval: float = 1.0):
         """Start background thread for monitor updates"""
-
         def update_loop():
             while True:
                 try:
                     if self.monitor and self.monitor.visualization_enabled:
                         current_state = self.network.get_network_state()
                         self.monitor.update_neuron_positions(current_state['neuron_positions'])
-                        connectivity = self.calculate_connectivity()
-                        self.monitor.update_connectivity(connectivity)
+                        self._update_network_health()
                 except Exception as e:
                     print(f"Error in background update loop: {e}")
                 time.sleep(update_interval)
