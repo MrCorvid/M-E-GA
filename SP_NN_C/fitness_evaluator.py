@@ -22,10 +22,10 @@ class FitnessEvaluator:
 
         # Core reward parameters
         self.max_path_length = movement_rewards.get('max_path_length', 60)
-        self.rotation_reward = movement_rewards.get('rotation_reward', 0.2)
-        self.pickup_reward = movement_rewards.get('pickup_reward', 0.0)
+        self.rotation_reward = movement_rewards.get('rotation_reward', 0.5)
+        self.pickup_reward = movement_rewards.get('pickup_reward', 0.5)
         self.successful_drop_reward = movement_rewards.get('successful_drop_reward', 5.0)
-        self.distance_penalty = movement_rewards.get('distance_penalty', 2.0)
+        self.distance_penalty = movement_rewards.get('distance_penalty', 0.1)
 
         # For tracking
         self.current_generation = 0
@@ -44,17 +44,28 @@ class FitnessEvaluator:
         try:
             # Execute path and get results
             results = self.evolution_system.execute_movement_sequence(path)
-
+            
             # Calculate raw path score
             path_score = self.evaluate_path_execution(results)
 
-            # Get network connectivity (0-100)
-            connectivity = self.evaluate_network_structure()
+            # Get network health metrics
+            health_metrics = self.evolution_system._get_network_health()
+            
+            # Get combined health score (already includes both structural and density)
+            combined_health = health_metrics['combined_health']
 
-            final_score = path_score ** (connectivity)
+            # Store connectivity for tracking
+            self._last_connectivity = health_metrics['structural_connectivity']
+            
+            # Update monitor connectivity if monitor exists
+            if self.evolution_system.monitor:
+                self.evolution_system.monitor.update_health_metrics(health_metrics)
+
+            # Final score = path_score * (combined_health/100)
+            final_score = path_score * (combined_health / 100.0)
 
             if self.debug:
-                self._print_debug_info(results, path_score, connectivity, final_score)
+                self._print_debug_info(results, path_score, health_metrics, final_score)
 
             return max(0.0, final_score)
 
@@ -81,20 +92,15 @@ class FitnessEvaluator:
         else:
             score += self.max_path_length
             excess_distance = total_distance - self.max_path_length
-            penalty = (excess_distance ** 2) * self.distance_penalty
-            score -= penalty
+            score -= excess_distance * self.distance_penalty
 
         return score
 
     def evaluate_network_structure(self) -> float:
         """Get network connectivity score (0-100)."""
-        connectivity = self.evolution_system.calculate_connectivity()
-
-        if abs(connectivity - self._last_connectivity) > 1:
-            self._last_connectivity = connectivity
-            self.evolution_system.update_monitor_connectivity(connectivity)
-
-        return connectivity
+        # Get complete health metrics
+        health_metrics = self.evolution_system._get_network_health()
+        return health_metrics['combined_health']
 
     def get_stats(self) -> Dict:
         """Get current evaluation statistics"""
@@ -111,7 +117,7 @@ class FitnessEvaluator:
         }
 
     def _print_debug_info(self, results: Dict, path_score: float,
-                          connectivity: float, final_fitness: float):
+                         health_metrics: Dict, final_fitness: float):
         """Print debug information about fitness calculation"""
         if not self.debug:
             return
@@ -122,13 +128,28 @@ class FitnessEvaluator:
         print(f"Rotations: {results['rotations_made']}")
         print(f"Pickups: {results['pickups_made']}")
         print(f"Successful Drops: {results['successful_drops']}")
-
+        
         if results['path_length'] > self.max_path_length:
             excess = results['path_length'] - self.max_path_length
-            penalty = (excess ** 2) * self.distance_penalty
+            penalty = excess * self.distance_penalty
             print(f"Excess Distance: {excess:.2f}")
-            print(f"Quadratic Distance Penalty: -{penalty:.2f}")
-
+            print(f"Distance Penalty: -{penalty:.2f}")
+        
+        print(f"\nNetwork Health Metrics:")
+        print(f"Structural Connectivity: {health_metrics['structural_connectivity']:.1f}%")
+        print(f"Connection Density: {health_metrics['connection_density']:.1f}%")
+        print(f"Combined Health: {health_metrics['combined_health']:.1f}%")
+        
+        print(f"\nScores:")
         print(f"Raw Path Score: {path_score:.2f}")
-        print(f"Network Connectivity: {connectivity:.1f}%")
         print(f"Final Fitness: {final_fitness:.2f}")
+        
+        # Print metadata if available
+        if 'metadata' in health_metrics:
+            print("\nHealth Calculation Details:")
+            meta = health_metrics['metadata']
+            print(f"Density Margin: {meta['density_margin']}")
+            print(f"Structural Weight: {meta['structural_weight']}")
+            print(f"Density Weight: {meta['density_weight']}")
+            print(f"Raw Density: {meta['raw_density']:.1f}%")
+            print(f"Adjusted Density: {meta['adjusted_density']:.1f}%")
