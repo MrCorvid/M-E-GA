@@ -14,7 +14,7 @@ class ExperimentRunner:
         self.config = {
             'network_params': {
                 # Core network structure
-                'volume_size': 55.0,
+                'volume_size': 30.0,
                 'num_input': 10,
                 'num_output': 20,
                 'total_neurons': 500,
@@ -38,7 +38,7 @@ class ExperimentRunner:
                 'max_path_length': 1000,
                 'rotation_reward': 0.0,
                 'pickup_reward': 5.0,
-                'successful_drop_reward': 0.0,
+                'successful_drop_reward': 3.0,
                 'distance_penalty': 130.0
             }
         }
@@ -53,7 +53,7 @@ class ExperimentRunner:
             'delimit_delete_prob': 0.03,
             'crossover_prob': 0.00,
             'elitism_ratio': 0.00,
-            'base_gene_prob': 0.50,
+            'base_gene_prob': 0.40,
             'capture_gene_prob': 0.01,
             'max_individual_length': 20,
             'population_size': 700,

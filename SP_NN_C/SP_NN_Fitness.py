@@ -16,17 +16,8 @@ import threading
 import time
 import sys
 import queue
-import tkinter as tk
-from tkinter import ttk
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-from dataclasses import dataclass
-from collections import defaultdict, deque
-from enum import Enum
 import numpy as np
 from scipy.spatial import KDTree
-import concurrent.futures
-from threading import Lock, RLock
 
 
 class NetworkEvolutionFitness:
@@ -123,15 +114,17 @@ class NetworkEvolutionFitness:
         # to form the binary command stream
         self.genes = [str(i) for i in range(10)]  # ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']
 
-        # Initialize last connectivity score
-        self._last_connectivity = 0
+        # Initialize last health metrics
+        self._last_health_metrics = None
 
     def compute(self, encoded_individual, ga_instance) -> float:
         """
-        Fitness computation with network visualization at 100% connectivity.
+        Fitness computation with comprehensive network health evaluation.
+
         Args:
             encoded_individual: The encoded genome representing the sequence of digits.
             ga_instance: The genetic algorithm instance.
+
         Returns:
             float: The calculated fitness score.
         """
@@ -151,37 +144,49 @@ class NetworkEvolutionFitness:
         # Compute fitness using evaluator
         fitness = self.evaluator.compute_fitness(path)
 
-        # Check if we've achieved 100% connectivity
-        connectivity = int(self.evolution.calculate_connectivity())
-        if connectivity == 100:
+        # Get comprehensive health metrics
+        health_metrics = self.evolution.get_network_stats()['health_metrics']
+
+        # Store for debugging and monitoring
+        self._last_health_metrics = health_metrics
+
+        # Check if we've achieved optimal network health
+        if health_metrics['combined_health'] >= 95:  # Using combined health threshold
             if self.debug:
-                print("\nExiting Phase 1: Achieved 100% network connectivity")
+                print("\nExiting Phase 1: Achieved optimal network health")
+                print("\nFinal Health Metrics:")
+                print(f"Structural Connectivity: {health_metrics['structural_connectivity']:.1f}%")
+                print(f"Connection Density: {health_metrics['connection_density']:.1f}%")
+                print(f"Combined Health: {health_metrics['combined_health']:.1f}%")
+                print("\nNetwork Statistics:")
                 stats = self.get_stats()
-                print(f"Final Stats:")
                 print(f"Total Neurons: {stats['network']['total_neurons']}")
                 print(f"Path Length: {len(path)}")
                 print(f"Path: {''.join(map(str, path))}")
 
-            # Exit the program since connectivity is achieved
+            # Exit the program since optimal health is achieved
             sys.exit(0)
 
         if self.debug:
-            self._print_debug_info(path, fitness, connectivity)
+            self._print_debug_info(path, fitness, health_metrics)
 
         if self.update_best:
             self.update_best(encoded_individual, fitness)
 
         return fitness
 
-    def _print_debug_info(self, path: List[int], fitness: float, connectivity: float):
-        """Print debug information about fitness calculation"""
+    def _print_debug_info(self, path: List[int], fitness: float, health_metrics: Dict):
+        """Print comprehensive debug information about fitness and health metrics"""
         if not self.debug:
             return
 
         print("\nFitness Calculation Details:")
         print(f"Path Length: {len(path)}")
         print(f"Path: {''.join(map(str, path))}")
-        print(f"Network Connectivity: {connectivity}%")
+        print("\nNetwork Health Metrics:")
+        print(f"Structural Connectivity: {health_metrics['structural_connectivity']:.1f}%")
+        print(f"Connection Density: {health_metrics['connection_density']:.1f}%")
+        print(f"Combined Health: {health_metrics['combined_health']:.1f}%")
         print(f"Final Fitness: {fitness:.2f}")
 
         # Print command analysis if available
@@ -198,14 +203,22 @@ class NetworkEvolutionFitness:
                 cmd_name = command_names.get(cmd, "Unknown")
                 print(f"{cmd_name}: {mag:.2f}")
 
+        # Print detailed health metadata if available
+        if 'metadata' in health_metrics:
+            meta = health_metrics['metadata']
+            print("\nHealth Calculation Details:")
+            print(f"Density Margin: {meta['density_margin']}")
+            print(f"Structural Weight: {meta['structural_weight']}")
+            print(f"Density Weight: {meta['density_weight']}")
+            print(f"Raw Density: {meta['raw_density']:.1f}%")
+            print(f"Adjusted Density: {meta['adjusted_density']:.1f}%")
+
     def get_stats(self) -> Dict:
-        """Get current statistics from all components"""
+        """Get comprehensive statistics from all components"""
+        network_stats = self.evolution.get_network_stats()
         return {
-            'connectivity': {
-                'current': self.evolution.calculate_connectivity(),
-                'unreachable_neurons': self.network.compute_connectivity_score()
-            },
+            'health_metrics': network_stats['health_metrics'],
             'path': self.evaluator.get_stats(),
-            'network': self.evolution.get_network_stats(),
+            'network': network_stats,
             'current_state': self.evolution.get_current_state()
         }

@@ -199,8 +199,24 @@ class NetworkEvolution:
                 'network_health': self._get_network_health()
             }
 
+    def calculate_connectivity(self) -> float:
+        """
+        Legacy method renamed to match new health metrics system.
+        Returns structural connectivity score.
+        """
+        return self.get_network_stats()['health_metrics']['structural_connectivity']
+
+    def get_network_stats(self) -> Dict:
+        """Get current network statistics"""
+        state = self.network.get_network_state()
+        health_metrics = self.network.compute_network_health()
+        state.update({
+            'health_metrics': health_metrics,
+            'pickup_bag_size': len(self.pickup_bag)
+        })
+        return state
+
     def _get_network_health(self) -> dict:
-        """Get current network health metrics"""
         return self.network.compute_network_health()
 
     def _update_network_health(self):
@@ -208,16 +224,6 @@ class NetworkEvolution:
         self._last_health_metrics = self._get_network_health()
         if self.monitor:
             self.monitor.update_health_metrics(self._last_health_metrics)
-
-    def get_network_stats(self) -> Dict:
-        """Get current network statistics"""
-        state = self.network.get_network_state()
-        health_metrics = self._get_network_health()
-        state.update({
-            'health_metrics': health_metrics,
-            'pickup_bag_size': len(self.pickup_bag)
-        })
-        return state
 
     def get_current_state(self) -> Dict:
         """Get current evolution state"""

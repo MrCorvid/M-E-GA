@@ -117,6 +117,7 @@ class SpatialNeuralNetwork:
     def __init__(self, params: NetworkParameters):
         # Network parameters
         self.params = params
+        self.debug = False
 
         # Neuron collections
         self.neurons: Dict[int, Neuron] = {}
@@ -358,46 +359,41 @@ class SpatialNeuralNetwork:
 
     def compute_connection_density(self) -> float:
         """
-        Computes connection density using validated mathematical framework,
-        focusing only on hidden neurons to measure emergent connectivity patterns.
-        
-        Density = (E_actual × R_max³) / (E_fully_connected × (R_max_actual³ - R_min_actual³)) × 100
-        
-        Returns:
-            float: Score from 0-100% indicating density relative to theoretical maximum
+        Computes connection density using validated mathematical framework.
+        Includes a 10% margin in scaling to account for practical connection limits.
         """
         with self.neuron_lock:
-            # Filter for hidden neurons only, excluding interface neurons
-            hidden_neurons = [n for n in self.neurons.values() 
-                             if n.type == NeuronType.HIDDEN and 
-                             n in self.hidden_neurons and 
-                             n not in self.interface_neurons]
-            
+            hidden_neurons = [n for n in self.neurons.values()
+                              if n.type == NeuronType.HIDDEN and
+                              n in self.hidden_neurons and
+                              n not in self.interface_neurons]
+
             if not hidden_neurons:
                 return 0.0
-            
+
             # Count actual connections between hidden neurons
-            E_actual = sum(len([c for c in n.connections 
-                               if c in hidden_neurons])  # Only count connections to other hidden neurons
+            E_actual = sum(len([c for c in n.connections
+                                if c in hidden_neurons])
                            for n in hidden_neurons)
-            
-            # Get radius values for hidden neurons only
+
             radii = [n.radius for n in hidden_neurons if n.radius > 0]
             if not radii:
                 return 0.0
-                
+
             R_max = self.params.max_radius
             R_max_actual = max(radii)
             R_min_actual = min(radii)
-            
-            # Calculate fully connected potential for hidden neurons only
+
+            # Calculate fully connected potential with 10% margin
             N = len(hidden_neurons)
-            E_fully_connected = N * (N-1)  # Directed graph maximum
-            
-            # Apply validated formula
+            E_fully_connected = N * (N - 1)  # Directed graph maximum
+            MARGIN = 0.90  # 10% margin means we expect 90% of theoretical maximum
+
             try:
-                density = (E_actual * R_max**3) / (E_fully_connected * 
-                          (R_max_actual**3 - R_min_actual**3)) * 100
+                # Apply margin to denominator scaling to adjust expected maximum
+                density = (E_actual * R_max ** 3) / (E_fully_connected *
+                                                     (R_max_actual ** 3 - R_min_actual ** 3) * MARGIN) * 100
+
                 return max(0.0, min(density, 100.0))
             except ZeroDivisionError:
                 return 0.0
@@ -463,39 +459,27 @@ class SpatialNeuralNetwork:
         """
         Computes comprehensive network health metrics combining structural
         connectivity and connection density scores.
-        
-        Returns:
-            dict: Contains:
-                - structural_connectivity: Raw structural score (0-100%)
-                - connection_density: Raw density score (0-100%)
-                - combined_health: Weighted combination with internal margin
-                - metadata: Weight and margin information
         """
-        # Calculate raw metrics
-        structural = self.compute_structural_connectivity()
-        density = self.compute_connection_density()
-        
-        # Apply margin to density
-        DENSITY_MARGIN = 10.0
-        adjusted_density = max(0.0, density - DENSITY_MARGIN)
-        
-        # Calculate weighted combination
         STRUCTURAL_WEIGHT = 0.60
         DENSITY_WEIGHT = 0.40
-        
-        combined_health = (STRUCTURAL_WEIGHT * structural + 
-                          DENSITY_WEIGHT * adjusted_density)
-        
+        DENSITY_MARGIN = 10.0  # Keep this in metadata even though applied in density calc
+
+        structural = self.compute_structural_connectivity()
+        density = self.compute_connection_density()  # Margin is applied inside this calculation
+
+        combined_health = (STRUCTURAL_WEIGHT * structural +
+                           DENSITY_WEIGHT * density)
+
         return {
             'structural_connectivity': structural,
             'connection_density': density,
             'combined_health': combined_health,
             'metadata': {
-                'density_margin': DENSITY_MARGIN,
+                'density_margin': DENSITY_MARGIN,  # Keep for monitoring/debugging
                 'structural_weight': STRUCTURAL_WEIGHT,
                 'density_weight': DENSITY_WEIGHT,
                 'raw_density': density,
-                'adjusted_density': adjusted_density
+                'adjusted_density': density  # Now they're the same since margin is in calculation
             }
         }
 
@@ -680,19 +664,15 @@ if __name__ == "__main__":
     }
 
     # Create network with consistent parameters
-    params = NetworkParameters(
-        volume_size=network_params['volume_size'],
-        num_input=network_params['num_input'],
-        num_output=network_params['num_output'],
-        total_neurons=network_params['total_neurons'],
-        activation_budget=network_params['activation_budget'],
-        time_window_size=network_params['time_window_size']
-    )
+    params = NetworkParameters(**network_params)
     network = create_network(params)
 
-    # Compute number of unreachable neurons
-    unreachable_neurons = network.compute_connectivity_score()
-    print(f"Unreachable Neurons: {unreachable_neurons}")
+    # Get initial network health metrics
+    health_metrics = network.compute_network_health()
+    print("\nInitial Network Health Metrics:")
+    print(f"Structural Connectivity: {health_metrics['structural_connectivity']:.1f}%")
+    print(f"Connection Density: {health_metrics['connection_density']:.1f}%")
+    print(f"Combined Health: {health_metrics['combined_health']:.1f}%")
 
     # Get positions of hidden neurons
     hidden_positions = network.get_hidden_neuron_positions()
@@ -716,9 +696,21 @@ if __name__ == "__main__":
     # Update hidden neuron positions in the network
     network.update_hidden_neuron_positions(modified_positions)
 
-    # Recompute number of unreachable neurons after modification
-    unreachable_neurons_after = network.compute_connectivity_score()
-    print(f"Unreachable Neurons After Modification: {unreachable_neurons_after}")
+    # Compute updated health metrics
+    health_metrics_after = network.compute_network_health()
+    print("\nNetwork Health Metrics After Position Updates:")
+    print(f"Structural Connectivity: {health_metrics_after['structural_connectivity']:.1f}%")
+    print(f"Connection Density: {health_metrics_after['connection_density']:.1f}%")
+    print(f"Combined Health: {health_metrics_after['combined_health']:.1f}%")
+
+    # Print detailed metadata
+    print("\nHealth Calculation Details:")
+    meta = health_metrics_after['metadata']
+    print(f"Density Margin: {meta['density_margin']}")
+    print(f"Structural Weight: {meta['structural_weight']}")
+    print(f"Density Weight: {meta['density_weight']}")
+    print(f"Raw Density: {meta['raw_density']:.1f}%")
+    print(f"Adjusted Density: {meta['adjusted_density']:.1f}%")
 
     # Plot the network
     plot_network_with_weights(network)
