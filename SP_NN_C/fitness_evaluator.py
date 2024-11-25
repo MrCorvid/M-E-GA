@@ -1,4 +1,5 @@
-from typing import List, Dict
+from typing import List, Dict, Optional, Callable
+from SP_NN import create_network, SpatialNeuralNetwork, NetworkParameters, Position
 from network_evolution import NetworkEvolution
 
 
@@ -9,14 +10,6 @@ class FitnessEvaluator:
             movement_rewards: Dict,
             debug: bool = False
     ):
-        """
-        Initialize the fitness evaluator with core mechanics and health metrics.
-
-        Args:
-            evolution_system: NetworkEvolution instance
-            movement_rewards: Dictionary of reward parameters
-            debug: Enable debug output
-        """
         self.evolution_system = evolution_system
         self.debug = debug
 
@@ -27,26 +20,33 @@ class FitnessEvaluator:
         self.successful_drop_reward = movement_rewards.get('successful_drop_reward', 5.0)
         self.distance_penalty = movement_rewards.get('distance_penalty', 0.1)
 
-        # Weights for fitness components
-        self.health_weight = 0.6  # Weight for network health
-        self.path_weight = 0.4  # Weight for path execution
-        self.structural_weight = 0.20  # Weight for structural connectivity within health
-        self.density_weight = 0.80  # Weight for connection density within health
-
         # For tracking
         self.current_generation = 0
         self._last_health_metrics = None
 
+    def compute_network_fitness(self) -> float:
+        """
+        Computes and combines structural connectivity and density scores for fitness.
+        Returns single composite score for use in final fitness calculation.
+        """
+        metrics = self.evolution_system.network.compute_fitness_metrics()
+
+        # Get raw structural and density scores
+        structural = metrics['raw_values']['structural']
+        density = metrics['raw_values']['density']
+
+        # Simple addition for now - easy to modify combination logic
+        composite_score = structural + density
+
+        if self.debug:
+            print(f"\nNetwork Fitness Components:")
+            print(f"  Structural Score: {structural:.2f}")
+            print(f"  Density Score: {density:.2f}")
+            print(f"  Composite Score: {composite_score:.2f}")
+
+        return composite_score
+
     def compute_fitness(self, path: List[int]) -> float:
-        """
-        Compute fitness based on path execution and network health metrics.
-
-        Args:
-            path: List of integers representing movement commands
-
-        Returns:
-            float: Combined fitness score (minimum 0.1)
-        """
         try:
             # Execute path and get results
             results = self.evolution_system.execute_movement_sequence(path)
@@ -54,46 +54,23 @@ class FitnessEvaluator:
             # Calculate raw path score
             path_score = self.evaluate_path_execution(results)
 
-            # Get comprehensive network health metrics
-            network_stats = self.evolution_system.get_network_stats()
-            health_metrics = network_stats['health_metrics']
+            # Get composite network score
+            network_score = self.compute_network_fitness()
 
-            # Store metrics for tracking
-            self._last_health_metrics = health_metrics
-
-            # Extract and normalize health components
-            structural_score = health_metrics['structural_connectivity']
-            density_score = health_metrics['connection_density']
-
-            # Calculate combined network health score
-            network_score = (self.structural_weight * structural_score +
-                             self.density_weight * density_score)
-
-            # Calculate overall fitness
-            # Normalize path_score to 0-1 range (assuming max possible is around 100)
-            normalized_path_score = path_score
-
-            # Combine network health and path execution scores
-            final_score = (path_score * network_score) * 100.0
+            # Combine path and network scores
+            final_score = path_score ** network_score
 
             if self.debug:
-                self._print_debug_info(results, path_score, health_metrics, final_score)
+                self._print_debug_info(results, path_score, network_score, final_score)
 
-            # Ensure minimum positive fitness
             return max(0.1, final_score)
 
         except Exception as e:
             if self.debug:
                 print(f"Error computing fitness: {e}")
-            return 0.1  # Return small positive value instead of 0
+            return 0.1
 
     def evaluate_path_execution(self, results: Dict) -> float:
-        """
-        Evaluate path execution using core mechanics.
-
-        Returns:
-            float: Raw path execution score
-        """
         score = 0.0
 
         # Base rewards
@@ -109,11 +86,11 @@ class FitnessEvaluator:
             score += self.max_path_length
             excess_distance = total_distance - self.max_path_length
             score -= excess_distance * self.distance_penalty
+            print(excess_distance, ' Over distance.')
 
-        return max(0.0, score)  # Ensure non-negative score
+        return score
 
     def get_stats(self) -> Dict:
-        """Get current evaluation statistics"""
         return {
             'current_generation': self.current_generation,
             'rewards': {
@@ -123,18 +100,11 @@ class FitnessEvaluator:
                 'distance_penalty': self.distance_penalty,
                 'max_path_length': self.max_path_length
             },
-            'weights': {
-                'health_weight': self.health_weight,
-                'path_weight': self.path_weight,
-                'structural_weight': self.structural_weight,
-                'density_weight': self.density_weight
-            },
             'last_health_metrics': self._last_health_metrics
         }
 
     def _print_debug_info(self, results: Dict, path_score: float,
-                          health_metrics: Dict, final_fitness: float):
-        """Print comprehensive debug information"""
+                          network_score: float, final_fitness: float):
         if not self.debug:
             return
 
@@ -152,21 +122,7 @@ class FitnessEvaluator:
             print(f"  Excess Distance: {excess:.2f}")
             print(f"  Distance Penalty: -{penalty:.2f}")
 
-        print(f"\nNetwork Health Metrics:")
-        print(f"  Structural Connectivity: {health_metrics['structural_connectivity']:.1f}%")
-        print(f"  Connection Density: {health_metrics['connection_density']:.1f}%")
-        print(f"  Combined Health: {health_metrics['combined_health']:.1f}%")
-
-        print(f"\nScores:")
-        print(f"  Raw Path Score: {path_score:.2f}")
+        print(f"\nFinal Scores:")
+        print(f"  Path Score: {path_score:.2f}")
+        print(f"  Network Score: {network_score:.2f}")
         print(f"  Final Fitness: {final_fitness:.2f}")
-
-        # Print metadata if available
-        if 'metadata' in health_metrics:
-            print("\nHealth Calculation Details:")
-            meta = health_metrics['metadata']
-            print(f"  Density Margin: {meta['density_margin']}")
-            print(f"  Structural Weight: {meta['structural_weight']}")
-            print(f"  Density Weight: {meta['density_weight']}")
-            print(f"  Raw Density: {meta['raw_density']:.1f}%")
-            print(f"  Adjusted Density: {meta['adjusted_density']:.1f}%")

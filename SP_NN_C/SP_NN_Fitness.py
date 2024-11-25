@@ -66,7 +66,7 @@ class NetworkEvolutionFitness:
         self.rotation_reward = path_rewards.get('rotation_reward', 0.5)
         self.pickup_reward = path_rewards.get('pickup_reward', 0.5)
         self.successful_drop_reward = path_rewards.get('successful_drop_reward', 5.0)
-        self.distance_penalty = path_rewards.get('distance_penalty', 0.1)
+        self.distance_penalty = path_rewards.get('distance_penalty', 200.1)
 
         # Debug and Update Function
         self.debug = debug

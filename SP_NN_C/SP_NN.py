@@ -357,6 +357,20 @@ class SpatialNeuralNetwork:
                 'remaining_budget': self.params.activation_budget - self.window_activations
             }
 
+    def compute_fitness_metrics(self) -> dict:
+        """Separate metrics for fitness calculation"""
+        structural = self.compute_structural_connectivity()
+        density = self.compute_connection_density()
+
+        return {
+            'structural_connectivity': structural,
+            'connection_density': density,
+            'raw_values': {
+                'structural': structural,
+                'density': density
+            }
+        }
+
     def compute_connection_density(self) -> float:
         """
         Computes connection density using validated mathematical framework.
