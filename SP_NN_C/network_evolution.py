@@ -64,10 +64,10 @@ class NetworkEvolution:
             position_updates = {}
 
             # Execute movement sequence
-            results = self.navigator.execute_movement_sequence(path)
-            positions = results['positions']
-            command_history = results['command_history']
-            command_positions = results['command_positions']
+            nav_results = self.navigator.execute_movement_sequence(path)
+            positions = nav_results['positions']
+            command_history = nav_results['command_history']
+            command_positions = nav_results['command_positions']
 
             # Create initial KD-tree for efficient neighbor searching
             available_neurons = [
@@ -162,17 +162,18 @@ class NetworkEvolution:
 
             # Return comprehensive results
             return {
-                'moves_made': results['moves_made'],
-                'pickups_made': len(results['move_positions']),
-                'successful_drops': results['drops_made'],
+                'moves_made': nav_results['moves_made'],
+                'pickups_made': len(nav_results['move_positions']),
+                'successful_drops': nav_results['drops_made'],
                 'failed_drops': 0,  # Maintained for compatibility
                 'neurons_moved': len(position_updates),
-                'rotations_made': results['rotations_made'],
+                'rotations_made': nav_results['rotations_made'],
                 'total_neurons': len(self.network.neurons),
                 'pickup_bag_size': len(self.pickup_bag),
                 'total_steps': len(positions),
                 'commands_executed': len(command_history),
                 'positions': positions,
+                'path_length': nav_results['path_length'],  # Get the actual distance from navigator
                 'network_health': self._last_health_metrics
             }
 
@@ -196,6 +197,7 @@ class NetworkEvolution:
                 'total_steps': 0,
                 'commands_executed': 0,
                 'positions': [self.navigator.current_pos],
+                'path_length': 0.0,
                 'network_health': self._get_network_health()
             }
 

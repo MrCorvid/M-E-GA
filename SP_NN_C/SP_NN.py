@@ -474,9 +474,9 @@ class SpatialNeuralNetwork:
         Computes comprehensive network health metrics combining structural
         connectivity and connection density scores.
         """
-        STRUCTURAL_WEIGHT = 0.60
-        DENSITY_WEIGHT = 0.40
-        DENSITY_MARGIN = 10.0  # Keep this in metadata even though applied in density calc
+        STRUCTURAL_WEIGHT = 0.20
+        DENSITY_WEIGHT = 0.80
+        DENSITY_MARGIN = 5.0  # Keep this in metadata even though applied in density calc
 
         structural = self.compute_structural_connectivity()
         density = self.compute_connection_density()  # Margin is applied inside this calculation
