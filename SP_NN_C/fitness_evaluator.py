@@ -58,7 +58,7 @@ class FitnessEvaluator:
                                        health_delta, final_fitness)
 
 
-            return final_fitness * final_combined_health
+            return final_fitness * (final_combined_health * 2)
 
         except Exception as e:
             if self.debug:

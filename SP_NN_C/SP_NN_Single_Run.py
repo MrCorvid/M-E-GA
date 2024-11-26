@@ -20,7 +20,7 @@ class ExperimentRunner:
                 'total_neurons': 500,
 
                 # Neuron radius parameters
-                'max_radius': 3.0,
+                'max_radius': 3.5,
                 'min_radius': 0.50,
                 'hidden_radius_range': (.6, 1.0),
                 'base_radius_shrink_rate': 0.95,
@@ -37,7 +37,7 @@ class ExperimentRunner:
             'path_rewards': {
                 'max_path_length': 100,
                 'rotation_reward': 0.0,
-                'pickup_reward': 0.50,
+                'pickup_reward': 5.00,
                 'successful_drop_reward': 7.0,
                 'distance_penalty': 50.0
             }
@@ -48,9 +48,9 @@ class ExperimentRunner:
             'mutation_prob': 0.15,
             'delimited_mutation_prob': 0.10,
             'open_mutation_prob': 0.05,
-            'capture_mutation_prob': 0.03,
-            'delimiter_insert_prob': 0.05,
-            'delimit_delete_prob': 0.1,
+            'capture_mutation_prob': 0.05,
+            'delimiter_insert_prob': 0.04,
+            'delimit_delete_prob': 0.08,
             'crossover_prob': 0.00,
             'elitism_ratio': 0.00,
             'base_gene_prob': 0.45,
