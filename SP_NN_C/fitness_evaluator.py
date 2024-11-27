@@ -28,38 +28,49 @@ class FitnessEvaluator:
             # Get initial network health
             initial_health = self.evolution_system.get_network_stats()['health_metrics']
             initial_combined_health = initial_health['combined_health']
-
+    
             # Execute path and get results
             results = self.evolution_system.execute_movement_sequence(path)
-
+    
             # Calculate path execution score
             path_score = self.evaluate_path_execution(results)
-
+    
             # Get final network health
             final_health = results['network_health']
             final_combined_health = final_health['combined_health']
-
-            # Calculate raw health delta
+    
+            # Calculate raw health delta and normalize
             health_delta = final_combined_health - initial_combined_health
-
+            normalized_health_delta = health_delta / 100.0  # Assuming health ranges from 0 to 100
+    
             # Apply score modification based on health impact
-            if path_score < 0 and health_delta > 0:
-                # Bad path with positive health impact - reduce negative magnitude
-                final_fitness = path_score / (1 + health_delta)
+            if health_delta > 0:
+                if path_score < 0:
+                    # Bad path with positive health impact - reduce penalty
+                    final_fitness = path_score / (1 + normalized_health_delta)
+                else:
+                    # Good path with positive health impact - amplify reward
+                    final_fitness = path_score * (1 + normalized_health_delta)
             elif health_delta < 0:
-                # Any path with negative health impact - amplify in negative direction
-                final_fitness = path_score + (path_score * abs(health_delta))
+                if path_score < 0:
+                    # Bad path with negative health impact - amplify penalty
+                    final_fitness = path_score * (1 + abs(normalized_health_delta))
+                else:
+                    # Good path with negative health impact - reduce reward
+                    final_fitness = path_score * (1 + normalized_health_delta)
             else:
-                # Good path with positive health impact - amplify in positive direction
-                final_fitness = path_score + (path_score * health_delta)
-
+                # No change in health
+                final_fitness = path_score
+    
             if self.debug:
                 self._print_debug_info(path_score, initial_health, final_health,
                                        health_delta, final_fitness)
-
-
-            return final_fitness * (final_combined_health * 2)
-
+    
+            # Multiply by final_combined_health (keeping your existing scaling)
+            final_fitness *= (final_combined_health * 2)
+    
+            return final_fitness
+    
         except Exception as e:
             if self.debug:
                 print(f"Error computing fitness: {e}")
