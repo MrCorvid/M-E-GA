@@ -14,15 +14,15 @@ class ExperimentRunner:
         self.config = {
             'network_params': {
                 # Core network structure
-                'volume_size': 20.0,
+                'volume_size': 30.0,
                 'num_input': 10,
                 'num_output': 20,
-                'total_neurons': 500,
+                'total_neurons': 300,
 
                 # Neuron radius parameters
                 'max_radius': 3.5,
                 'min_radius': 0.50,
-                'hidden_radius_range': (.6, 1.0),
+                'hidden_radius_range': (.5, 1.0),
                 'base_radius_shrink_rate': 0.95,
                 'input_radius_factor': 1.0,
                 'interface_radius_factor': 2.0,
@@ -37,27 +37,27 @@ class ExperimentRunner:
             'path_rewards': {
                 'max_path_length': 200,
                 'rotation_reward': 0.0,
-                'pickup_reward': 1.00,
-                'successful_drop_reward': 2.0,
-                'distance_penalty': 50.0
+                'pickup_reward': 3.00,
+                'successful_drop_reward': 6.0,
+                'distance_penalty': 20.0
             }
         }
 
         # GA configuration
         self.ga_config = {
             'mutation_prob': 0.15,
-            'delimited_mutation_prob': 0.11,
+            'delimited_mutation_prob': 0.1,
             'open_mutation_prob': 0.04,
-            'capture_mutation_prob': 0.03,
+            'capture_mutation_prob': 0.05,
             'delimiter_insert_prob': 0.04,
-            'delimit_delete_prob': 0.08,
+            'delimit_delete_prob': 0.04,
             'crossover_prob': 0.00,
             'elitism_ratio': 0.00,
-            'base_gene_prob': 0.20,
-            'capture_gene_prob': 0.04,
-            'max_individual_length': 50,
-            'population_size': 500,
-            'num_parents': 200,
+            'base_gene_prob': 0.45,
+            'capture_gene_prob': 0.03,
+            'max_individual_length': 100,
+            'population_size': 600,
+            'num_parents': 100,
             'max_generations': 1000,
             'delimiters': False,
             'delimiter_space': 2,

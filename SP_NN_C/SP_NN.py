@@ -1,4 +1,3 @@
-import numpy as np
 from typing import List, Dict, Set, Tuple, Optional, Deque
 from dataclasses import dataclass
 from collections import deque
@@ -10,6 +9,7 @@ import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from matplotlib.colors import Normalize
 from mpl_toolkits.mplot3d.art3d import Line3DCollection
+import numpy as np
 
 
 # Neuron type enumeration
@@ -28,8 +28,8 @@ class Position:
 
     def distance_to(self, other: 'Position') -> float:
         return np.sqrt((self.x - other.x) ** 2 +
-                      (self.y - other.y) ** 2 +
-                      (self.z - other.z) ** 2)
+                       (self.y - other.y) ** 2 +
+                       (self.z - other.z) ** 2)
 
 
 @dataclass
@@ -74,7 +74,6 @@ class Neuron:
 
     def calculate_weight(self, target: 'Neuron') -> float:
         distance = self.position.distance_to(target.position)
-        # Add small epsilon to prevent division by zero
         return np.clip(1.0 / (1.0 + max(distance, 1e-10)), 0.0, 1.0)
 
     def can_connect_to(self, target: 'Neuron') -> bool:
@@ -92,7 +91,6 @@ class Neuron:
         recent_activity = (sum(self.activation_history) / len(self.activation_history)
                            if self.activation_history else 0.0)
 
-        # Clip recent activity to prevent excessive growth
         recent_activity = np.clip(recent_activity, 0.0, 1.0)
 
         self.radius *= self.radius_shrink_rate
@@ -100,7 +98,6 @@ class Neuron:
         self.radius = np.clip(self.radius + activity_growth, self.min_radius, self.max_radius)
 
     def try_activate(self, input_value: float, network: 'SpatialNeuralNetwork') -> bool:
-        # Clip input value to prevent overflow
         input_value = np.clip(input_value, 0.0, 1.0)
 
         if network.can_spend_activation():
@@ -115,7 +112,6 @@ class Neuron:
 
 class SpatialNeuralNetwork:
     def __init__(self, params: NetworkParameters):
-        # Network parameters
         self.params = params
         self.debug = False
 
@@ -134,11 +130,11 @@ class SpatialNeuralNetwork:
         self.activation_times: Deque[int] = deque()
 
         # Thread safety controls
-        self.neuron_lock = RLock()  # Reentrant lock for neuron operations
-        self.connection_lock = Lock()  # Lock for connection updates
-        self.activation_lock = Lock()  # Lock for activation budget
-        self.collection_lock = Lock()  # Lock for modifying neuron collections
-        self.window_lock = Lock()  # Lock for window operations
+        self.neuron_lock = RLock()
+        self.connection_lock = Lock()
+        self.activation_lock = Lock()
+        self.collection_lock = Lock()
+        self.window_lock = Lock()
 
         # Thread pool for parallel operations
         self.pool = concurrent.futures.ThreadPoolExecutor(
@@ -357,24 +353,110 @@ class SpatialNeuralNetwork:
                 'remaining_budget': self.params.activation_budget - self.window_activations
             }
 
-    def compute_fitness_metrics(self) -> dict:
-        """Separate metrics for fitness calculation"""
+    def compute_network_health(self) -> dict:
+        STRUCTURAL_WEIGHT = 0.30
+        DENSITY_WEIGHT = 0.60
+        PROXIMITY_WEIGHT = 0.10
+
         structural = self.compute_structural_connectivity()
         density = self.compute_connection_density()
+        proximity = self._compute_proximity_score()
+
+        combined_health = (
+                STRUCTURAL_WEIGHT * structural +
+                DENSITY_WEIGHT * density +
+                PROXIMITY_WEIGHT * proximity
+        )
 
         return {
             'structural_connectivity': structural,
             'connection_density': density,
-            'raw_values': {
-                'structural': structural,
-                'density': density
+            'proximity_score': proximity,
+            'combined_health': combined_health,
+            'metadata': {
+                'structural_weight': STRUCTURAL_WEIGHT,
+                'density_weight': DENSITY_WEIGHT,
+                'proximity_weight': PROXIMITY_WEIGHT,
+                'raw_density': density,
+                'raw_proximity': proximity
             }
         }
+
+    def _compute_proximity_score(self) -> float:
+        total_potential = 0
+        hidden_neurons = [n for n in self.neurons.values()
+                          if n.type == NeuronType.HIDDEN]
+
+        if len(hidden_neurons) <= 1:
+            return 0.0
+
+        positions = np.array([[n.position.x, n.position.y, n.position.z]
+                              for n in hidden_neurons])
+        tree = KDTree(positions)
+
+        proximity_radius = self.params.max_radius * 1.2
+
+        for i, neuron in enumerate(hidden_neurons):
+            neighbors = tree.query_ball_point(
+                [neuron.position.x, neuron.position.y, neuron.position.z],
+                proximity_radius
+            )
+
+            if i in neighbors:
+                neighbors.remove(i)
+
+            total_potential += len(neighbors)
+
+        max_potential = len(hidden_neurons) * (len(hidden_neurons) - 1) / 2
+        proximity_score = (total_potential / (2 * max_potential)) * 100
+
+        return np.clip(proximity_score, 0.0, 100.0)
+
+    def compute_structural_connectivity(self) -> float:
+        """
+        Computes structural connectivity using component counting via Union-Find algorithm.
+        """
+        with self.neuron_lock:
+            N = len(self.neurons)
+            if N <= 1:
+                return 100.0  # Trivially connected for 0 or 1 neurons
+
+            parent = {neuron.id: neuron.id for neuron in self.neurons.values()}
+            rank = {neuron.id: 0 for neuron in self.neurons.values()}
+
+            def find(x):
+                while parent[x] != x:
+                    parent[x] = parent[parent[x]]  # Path compression
+                    x = parent[x]
+                return x
+
+            def union(x, y):
+                root_x = find(x)
+                root_y = find(y)
+                if root_x == root_y:
+                    return
+                if rank[root_x] < rank[root_y]:
+                    parent[root_x] = root_y
+                else:
+                    parent[root_y] = root_x
+                    if rank[root_x] == rank[root_y]:
+                        rank[root_x] += 1
+
+            for neuron in self.neurons.values():
+                neuron_id = neuron.id
+                for target in neuron.connections:
+                    union(neuron_id, target.id)
+
+            unique_roots = set(find(x) for x in parent)
+            C = len(unique_roots)
+
+            score = ((N - C) / (N - 1)) * 100
+
+            return max(0.0, min(score, 100.0))  # Ensure score is in [0,100]
 
     def compute_connection_density(self) -> float:
         """
         Computes connection density using validated mathematical framework.
-        Includes a 10% margin in scaling to account for practical connection limits.
         """
         with self.neuron_lock:
             hidden_neurons = [n for n in self.neurons.values()
@@ -385,7 +467,6 @@ class SpatialNeuralNetwork:
             if not hidden_neurons:
                 return 0.0
 
-            # Count actual connections between hidden neurons
             E_actual = sum(len([c for c in n.connections
                                 if c in hidden_neurons])
                            for n in hidden_neurons)
@@ -398,112 +479,19 @@ class SpatialNeuralNetwork:
             R_max_actual = max(radii)
             R_min_actual = min(radii)
 
-            # Calculate fully connected potential with 10% margin
             N = len(hidden_neurons)
-            E_fully_connected = N * (N - 1)  # Directed graph maximum
-            MARGIN = 0.90  # 10% margin means we expect 90% of theoretical maximum
+            E_fully_connected = N * (N - 1)
+            MARGIN = 0.90
 
             try:
-                # Apply margin to denominator scaling to adjust expected maximum
                 density = (E_actual * R_max ** 3) / (E_fully_connected *
                                                      (R_max_actual ** 3 - R_min_actual ** 3) * MARGIN) * 100
 
                 return max(0.0, min(density, 100.0))
             except ZeroDivisionError:
                 return 0.0
-    
-    def compute_structural_connectivity(self) -> float:
-        """
-        Computes structural connectivity using component counting via Union-Find algorithm.
-        Measures how well neurons form connected groups in the network topology.
-        
-        Returns:
-            float: Score from 0-100% indicating structural connectivity:
-                   - 100%: Single fully connected component
-                   - 0%: Every neuron is isolated
-        """
-        with self.neuron_lock:
-            N = len(self.neurons)
-            if N <= 1:
-                return 100.0  # Trivially connected for 0 or 1 neurons
-    
-            # Initialize Union-Find data structure
-            parent = {neuron.id: neuron.id for neuron in self.neurons.values()}
-            rank = {neuron.id: 0 for neuron in self.neurons.values()}
-    
-            def find(x):
-                """Finds the root parent of x with path compression."""
-                while parent[x] != x:
-                    parent[x] = parent[parent[x]]  # Path compression
-                    x = parent[x]
-                return x
-    
-            def union(x, y):
-                """Unites the sets containing x and y using union by rank."""
-                root_x = find(x)
-                root_y = find(y)
-                if root_x == root_y:
-                    return
-                if rank[root_x] < rank[root_y]:
-                    parent[root_x] = root_y
-                else:
-                    parent[root_y] = root_x
-                    if rank[root_x] == rank[root_y]:
-                        rank[root_x] += 1
-    
-            # Build connected components via neuron connections
-            for neuron in self.neurons.values():
-                neuron_id = neuron.id
-                for target in neuron.connections:
-                    union(neuron_id, target.id)
-    
-            # Count unique connected components
-            unique_roots = set(find(x) for x in parent)
-            C = len(unique_roots)
-    
-            # Calculate connectivity score
-            # ((N - C) / (N - 1)) * 100 gives us:
-            # - N components (fully disconnected) = 0%
-            # - 1 component (fully connected) = 100%
-            score = ((N - C) / (N - 1)) * 100
-    
-            return max(0.0, min(score, 100.0))  # Ensure score is in [0,100]
-
-    def compute_network_health(self) -> dict:
-        """
-        Computes comprehensive network health metrics combining structural
-        connectivity and connection density scores.
-        """
-        STRUCTURAL_WEIGHT = 0.30
-        DENSITY_WEIGHT = 0.70
-        DENSITY_MARGIN = 5.0  # Keep this in metadata even though applied in density calc
-
-        structural = self.compute_structural_connectivity()
-        density = self.compute_connection_density()  # Margin is applied inside this calculation
-
-        combined_health = (STRUCTURAL_WEIGHT * structural +
-                           DENSITY_WEIGHT * density)
-
-        return {
-            'structural_connectivity': structural,
-            'connection_density': density,
-            'combined_health': combined_health,
-            'metadata': {
-                'density_margin': DENSITY_MARGIN,  # Keep for monitoring/debugging
-                'structural_weight': STRUCTURAL_WEIGHT,
-                'density_weight': DENSITY_WEIGHT,
-                'raw_density': density,
-                'adjusted_density': density  # Now they're the same since margin is in calculation
-            }
-        }
-
 
 def plot_network_with_weights(network: SpatialNeuralNetwork):
-    import matplotlib.pyplot as plt
-    from matplotlib.colors import Normalize
-    from mpl_toolkits.mplot3d.art3d import Line3DCollection
-    from matplotlib.lines import Line2D
-
     fig = plt.figure(figsize=(12, 8))
     ax = fig.add_subplot(111, projection='3d')
     color_map = {
@@ -511,24 +499,20 @@ def plot_network_with_weights(network: SpatialNeuralNetwork):
         NeuronType.HIDDEN: 'blue',
         NeuronType.OUTPUT: 'green'
     }
-    # Get all weights for normalization
     weights = [neuron.calculate_weight(target)
                for neuron in network.neurons.values()
                for target in neuron.connections]
     if not weights:
-        weights = [0.0]  # Avoid errors if weights list is empty
+        weights = [0.0]
     norm = Normalize(vmin=min(weights), vmax=max(weights))
     cmap = plt.get_cmap('viridis')
-    # Create lists to store line segments and their colors
     line_segments = []
     colors = []
-    # Plot neurons
+
     for neuron in network.neurons.values():
-        # Plot neuron
         color = 'cyan' if neuron in network.interface_neurons else color_map[neuron.type]
         ax.scatter(neuron.position.x, neuron.position.y, neuron.position.z,
                    color=color, s=50)
-        # Prepare connections for Line3DCollection
         for target in neuron.connections:
             xs = [neuron.position.x, target.position.x]
             ys = [neuron.position.y, target.position.y]
@@ -536,14 +520,13 @@ def plot_network_with_weights(network: SpatialNeuralNetwork):
             line_segments.append(list(zip(xs, ys, zs)))
             weight = neuron.calculate_weight(target)
             colors.append(weight)
+
     if line_segments:
-        # Create a Line3DCollection with the line segments
         lc = Line3DCollection(line_segments, cmap=cmap, norm=norm)
         lc.set_array(np.array(colors))
         ax.add_collection(lc)
-        # Add colorbar for weights
-        cbar = fig.colorbar(lc, ax=ax, label='Connection Weight')
-    # Add legend
+        fig.colorbar(lc, ax=ax, label='Connection Weight')
+
     legend_elements = [
         Line2D([0], [0], marker='o', color='w', markerfacecolor='red',
                label='Input Neuron', markersize=10),
@@ -564,13 +547,9 @@ def plot_network_with_weights(network: SpatialNeuralNetwork):
 def create_network(params: NetworkParameters) -> SpatialNeuralNetwork:
     network = SpatialNeuralNetwork(params)
     id_counter = 0
-
-    half_volume = params.volume_size / 2  # Define half the volume size for centering
-
+    half_volume = params.volume_size / 2
     input_radius = params.max_radius * params.input_radius_factor
     interface_radius = params.max_radius * params.interface_radius_factor
-
-    # Set to keep track of occupied positions
     occupied_positions = set()
 
     def is_position_occupied(position: Position) -> bool:
@@ -583,7 +562,6 @@ def create_network(params: NetworkParameters) -> SpatialNeuralNetwork:
 
     # Create input and interface neurons
     for _ in range(params.num_input):
-        # Generate unique position for input neuron using integer positions
         while True:
             input_pos = Position(
                 x=float(np.random.randint(-int(half_volume), int(half_volume))),
@@ -600,21 +578,14 @@ def create_network(params: NetworkParameters) -> SpatialNeuralNetwork:
         network.add_neuron(input_neuron)
         id_counter += 1
 
-        # Generate unique position for interface neuron adjacent to input
         while True:
-            # Pick a random adjacent position (including diagonals)
             dx = np.random.randint(-1, 2)
             dy = np.random.randint(-1, 2)
             dz = np.random.randint(-1, 2)
-            # Apply wrapping with centered volume
             new_x = (int(input_pos.x) + dx + int(half_volume)) % int(params.volume_size) - int(half_volume)
             new_y = (int(input_pos.y) + dy + int(half_volume)) % int(params.volume_size) - int(half_volume)
             new_z = (int(input_pos.z) + dz + int(half_volume)) % int(params.volume_size) - int(half_volume)
-            interface_pos = Position(
-                x=float(new_x),
-                y=float(new_y),
-                z=float(new_z)
-            )
+            interface_pos = Position(x=float(new_x), y=float(new_y), z=float(new_z))
             if not is_position_occupied(interface_pos):
                 add_position(interface_pos)
                 break
@@ -669,11 +640,11 @@ def create_network(params: NetworkParameters) -> SpatialNeuralNetwork:
 if __name__ == "__main__":
     # Define consistent network parameters
     network_params = {
-        'volume_size': 8.0,  # Example volume size
-        'num_input': 100,     # Align with fitness function
-        'num_output': 4,      # Align with fitness function
-        'total_neurons': 500, # Align with fitness function
-        'activation_budget': 1000,  # Ensure all necessary parameters are included
+        'volume_size': 8.0,
+        'num_input': 100,
+        'num_output': 4,
+        'total_neurons': 500,
+        'activation_budget': 1000,
         'time_window_size': 100
     }
 
@@ -686,19 +657,19 @@ if __name__ == "__main__":
     print("\nInitial Network Health Metrics:")
     print(f"Structural Connectivity: {health_metrics['structural_connectivity']:.1f}%")
     print(f"Connection Density: {health_metrics['connection_density']:.1f}%")
+    print(f"Proximity Score: {health_metrics['proximity_score']:.1f}%")
     print(f"Combined Health: {health_metrics['combined_health']:.1f}%")
 
     # Get positions of hidden neurons
     hidden_positions = network.get_hidden_neuron_positions()
 
-    # Example: Modify positions of hidden neurons (e.g., move them randomly)
+    # Modify positions of hidden neurons
     modified_positions = {}
     for neuron_id, pos in hidden_positions.items():
         dx = np.random.uniform(-1.0, 1.0)
         dy = np.random.uniform(-1.0, 1.0)
         dz = np.random.uniform(-1.0, 1.0)
         new_pos = (pos[0] + dx, pos[1] + dy, pos[2] + dz)
-        # Ensure the new position stays within the volume bounds
         half_volume = params.volume_size / 2
         new_pos = (
             np.clip(new_pos[0], -half_volume, half_volume - 1),
@@ -707,7 +678,7 @@ if __name__ == "__main__":
         )
         modified_positions[neuron_id] = new_pos
 
-    # Update hidden neuron positions in the network
+    # Update hidden neuron positions
     network.update_hidden_neuron_positions(modified_positions)
 
     # Compute updated health metrics
@@ -715,16 +686,17 @@ if __name__ == "__main__":
     print("\nNetwork Health Metrics After Position Updates:")
     print(f"Structural Connectivity: {health_metrics_after['structural_connectivity']:.1f}%")
     print(f"Connection Density: {health_metrics_after['connection_density']:.1f}%")
+    print(f"Proximity Score: {health_metrics_after['proximity_score']:.1f}%")
     print(f"Combined Health: {health_metrics_after['combined_health']:.1f}%")
 
     # Print detailed metadata
     print("\nHealth Calculation Details:")
     meta = health_metrics_after['metadata']
-    print(f"Density Margin: {meta['density_margin']}")
     print(f"Structural Weight: {meta['structural_weight']}")
     print(f"Density Weight: {meta['density_weight']}")
+    print(f"Proximity Weight: {meta['proximity_weight']}")
     print(f"Raw Density: {meta['raw_density']:.1f}%")
-    print(f"Adjusted Density: {meta['adjusted_density']:.1f}%")
+    print(f"Raw Proximity: {meta['raw_proximity']:.1f}%")
 
     # Plot the network
     plot_network_with_weights(network)

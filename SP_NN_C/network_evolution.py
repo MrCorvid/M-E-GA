@@ -10,8 +10,9 @@ from scipy.spatial import KDTree
 
 
 class NetworkEvolution:
-    AGENT_RADIUS = 1.0  # Interaction radius for agent
-    MAX_PICKUP_BAG = 500  # Maximum neurons we can carry at once
+    AGENT_RADIUS = 0.50  # Interaction radius for agent
+    MAX_PICKUP_BAG = 20  # Maximum neurons we can carry at once
+    PROXIMITY_FACTOR = 1.5  # Extended radius for proximity detection
 
     def __init__(
             self,
@@ -20,34 +21,32 @@ class NetworkEvolution:
             monitor: NetworkMonitor,
             params: NetworkParameters
     ):
-        """
-        Initialize NetworkEvolution with required components.
-
-        Args:
-            network: SpatialNeuralNetwork instance
-            navigator: NavigationSystem instance
-            monitor: NetworkMonitor instance
-            params: NetworkParameters instance
-        """
         self.network = network
         self.navigator = navigator
         self.monitor = monitor
         self.params = params
 
         # Evolution state
-        self.pickup_bag = deque(maxlen=self.MAX_PICKUP_BAG)  # FIFO queue for pickups
+        self.pickup_bag = deque(maxlen=self.MAX_PICKUP_BAG)
         self.processed_neurons = set()
         self.last_command_time = 0
         self._last_health_metrics = None
+
+        # Proximity tracking
+        self.total_near_connections = 0
+        self.proximity_samples = 0
 
         # Start background updates if monitor exists
         if self.monitor:
             self._start_background_updates()
 
     def execute_movement_sequence(self, path: List[int]) -> Dict:
-        """Execute a sequence of movements encoded in the number list"""
         try:
-            # Initialize visualization if enabled
+            # Reset tracking metrics
+            self.total_near_connections = 0
+            self.proximity_samples = 0
+
+            # Initialize visualization
             should_visualize = self.monitor and self.monitor.visualization_enabled
             if should_visualize:
                 self.monitor.clear_drops()
@@ -58,7 +57,7 @@ class NetworkEvolution:
             self.pickup_bag.clear()
             self.navigator.reset_position()
 
-            # Get current network state
+            # Get network state
             state = self.network.get_network_state()
             neuron_positions = state['neuron_positions']
             position_updates = {}
@@ -69,7 +68,7 @@ class NetworkEvolution:
             command_history = nav_results['command_history']
             command_positions = nav_results['command_positions']
 
-            # Create initial KD-tree for efficient neighbor searching
+            # Initialize KD-tree
             available_neurons = [
                 (nid, data['position'])
                 for nid, data in neuron_positions.items()
@@ -80,47 +79,56 @@ class NetworkEvolution:
 
             if available_neurons:
                 neuron_ids, positions_array = zip(*available_neurons)
-                neuron_pos_array = np.array([
-                    [p[0], p[1], p[2]] for p in positions_array
-                ])
+                neuron_pos_array = np.array([[p[0], p[1], p[2]] for p in positions_array])
                 tree = KDTree(neuron_pos_array)
 
-            # Process each command position
+            # Process commands
             for cmd_idx, (command, magnitude) in enumerate(command_history):
                 pos_idx = command_positions[cmd_idx]
                 current_pos = positions[pos_idx]
 
-                # Check for pickups at every position
+                # Check for pickups and near connections
                 if available_neurons and len(self.pickup_bag) < self.MAX_PICKUP_BAG:
-                    # Query for nearby neurons
                     nearby_indices = tree.query_ball_point(
                         [current_pos.x, current_pos.y, current_pos.z],
-                        self.AGENT_RADIUS
+                        self.AGENT_RADIUS * self.PROXIMITY_FACTOR
                     )
 
-                    for idx in nearby_indices:
-                        if len(self.pickup_bag) >= self.MAX_PICKUP_BAG:
-                            break
-
-                        nid = neuron_ids[idx]
-                        if nid not in self.pickup_bag and nid not in position_updates:
-                            self.pickup_bag.append(nid)
-
-                    # Update available neurons if any were picked up
                     if nearby_indices:
-                        # Create mask for remaining neurons
-                        mask = np.ones(len(neuron_ids), dtype=bool)
+                        self.proximity_samples += 1
+                        direct_connections = 0
+                        near_connections = 0
+
                         for idx in nearby_indices:
-                            mask[idx] = False
+                            nid = neuron_ids[idx]
+                            if nid not in self.pickup_bag and nid not in position_updates:
+                                distance = np.linalg.norm(
+                                    np.array([current_pos.x, current_pos.y, current_pos.z]) -
+                                    neuron_pos_array[idx]
+                                )
+                                if distance <= self.AGENT_RADIUS:
+                                    direct_connections += 1
+                                    self.pickup_bag.append(nid)
+                                elif distance <= self.AGENT_RADIUS * self.PROXIMITY_FACTOR:
+                                    near_connections += 1
 
-                        if any(mask):
-                            neuron_pos_array = neuron_pos_array[mask]
-                            neuron_ids = [nid for i, nid in enumerate(neuron_ids) if mask[i]]
-                            tree = KDTree(neuron_pos_array)
-                        else:
-                            available_neurons = []
+                        self.total_near_connections += near_connections
 
-                # Handle DROP command
+                        # Update available neurons
+                        if direct_connections:
+                            mask = np.ones(len(neuron_ids), dtype=bool)
+                            for idx in nearby_indices:
+                                if neuron_ids[idx] in self.pickup_bag:
+                                    mask[idx] = False
+
+                            if any(mask):
+                                neuron_pos_array = neuron_pos_array[mask]
+                                neuron_ids = [nid for i, nid in enumerate(neuron_ids) if mask[i]]
+                                tree = KDTree(neuron_pos_array)
+                            else:
+                                available_neurons = []
+
+                # Handle drops
                 if command == self.navigator.DROP and self.pickup_bag:
                     heading = self.navigator.heading
                     drop_pos = Position(
@@ -129,7 +137,6 @@ class NetworkEvolution:
                         z=current_pos.z - heading[2] * self.AGENT_RADIUS
                     )
 
-                    # Check if drop position is clear
                     position_clear = True
                     if available_neurons:
                         nearby = tree.query_ball_point(
@@ -139,7 +146,7 @@ class NetworkEvolution:
                         position_clear = len(nearby) == 0
 
                     if position_clear:
-                        neuron_id = self.pickup_bag.popleft()  # FIFO order
+                        neuron_id = self.pickup_bag.popleft()
                         position_updates[neuron_id] = (drop_pos.x, drop_pos.y, drop_pos.z)
 
                         if should_visualize:
@@ -150,22 +157,24 @@ class NetworkEvolution:
                     self.monitor.update_path_step(current_pos)
                     time.sleep(0.05)
 
-            # Apply position updates and update network health
+            # Apply updates
             if position_updates:
                 self.network.update_neuron_positions(position_updates)
                 self._update_network_health()
 
-            # Clear visualization after execution
+            # Clear visualization
             if should_visualize:
                 time.sleep(0.1)
                 self.monitor.clear_drops()
 
-            # Return comprehensive results
+            # Calculate proximity metrics
+            avg_near_connections = (self.total_near_connections / self.proximity_samples
+                                    if self.proximity_samples > 0 else 0)
+
             return {
                 'moves_made': nav_results['moves_made'],
                 'pickups_made': len(nav_results['move_positions']),
                 'successful_drops': nav_results['drops_made'],
-                'failed_drops': 0,  # Maintained for compatibility
                 'neurons_moved': len(position_updates),
                 'rotations_made': nav_results['rotations_made'],
                 'total_neurons': len(self.network.neurons),
@@ -173,43 +182,24 @@ class NetworkEvolution:
                 'total_steps': len(positions),
                 'commands_executed': len(command_history),
                 'positions': positions,
-                'path_length': nav_results['path_length'],  # Get the actual distance from navigator
-                'network_health': self._last_health_metrics
+                'path_length': nav_results['path_length'],
+                'network_health': self._last_health_metrics,
+                'proximity_metrics': {
+                    'total_near_connections': self.total_near_connections,
+                    'proximity_samples': self.proximity_samples,
+                    'avg_near_connections': avg_near_connections
+                }
             }
 
         except Exception as e:
             import traceback
             traceback.print_exc()
-
-            if should_visualize:
-                self.monitor.clear_drops()
-                self.monitor.clear_path()
-
-            return {
-                'moves_made': 0,
-                'pickups_made': 0,
-                'successful_drops': 0,
-                'failed_drops': 0,
-                'neurons_moved': 0,
-                'rotations_made': 0,
-                'total_neurons': len(self.network.neurons),
-                'pickup_bag_size': len(self.pickup_bag),
-                'total_steps': 0,
-                'commands_executed': 0,
-                'positions': [self.navigator.current_pos],
-                'path_length': 0.0,
-                'network_health': self._get_network_health()
-            }
+            return self._get_error_result()
 
     def calculate_connectivity(self) -> float:
-        """
-        Legacy method renamed to match new health metrics system.
-        Returns structural connectivity score.
-        """
         return self.get_network_stats()['health_metrics']['structural_connectivity']
 
     def get_network_stats(self) -> Dict:
-        """Get current network statistics"""
         state = self.network.get_network_state()
         health_metrics = self.network.compute_network_health()
         state.update({
@@ -222,23 +212,47 @@ class NetworkEvolution:
         return self.network.compute_network_health()
 
     def _update_network_health(self):
-        """Update network health metrics and monitor"""
         self._last_health_metrics = self._get_network_health()
         if self.monitor:
             self.monitor.update_health_metrics(self._last_health_metrics)
 
     def get_current_state(self) -> Dict:
-        """Get current evolution state"""
         health_metrics = self._get_network_health()
         return {
             'pickup_bag_size': len(self.pickup_bag),
             'processed_neurons': len(self.processed_neurons),
             'current_position': self.navigator.get_current_position(),
-            'health_metrics': health_metrics
+            'health_metrics': health_metrics,
+            'proximity_metrics': {
+                'total_near_connections': self.total_near_connections,
+                'proximity_samples': self.proximity_samples,
+                'avg_near_connections': (self.total_near_connections / self.proximity_samples
+                                         if self.proximity_samples > 0 else 0)
+            }
+        }
+
+    def _get_error_result(self) -> Dict:
+        return {
+            'moves_made': 0,
+            'pickups_made': 0,
+            'successful_drops': 0,
+            'neurons_moved': 0,
+            'rotations_made': 0,
+            'total_neurons': len(self.network.neurons),
+            'pickup_bag_size': len(self.pickup_bag),
+            'total_steps': 0,
+            'commands_executed': 0,
+            'positions': [self.navigator.current_pos],
+            'path_length': 0.0,
+            'network_health': self._get_network_health(),
+            'proximity_metrics': {
+                'total_near_connections': 0,
+                'proximity_samples': 0,
+                'avg_near_connections': 0
+            }
         }
 
     def _start_background_updates(self, update_interval: float = 1.0):
-        """Start background thread for monitor updates"""
         def update_loop():
             while True:
                 try:
