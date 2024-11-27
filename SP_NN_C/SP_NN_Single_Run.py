@@ -35,10 +35,10 @@ class ExperimentRunner:
                 'activation_radius_factor': 0.2
             },
             'path_rewards': {
-                'max_path_length': 100,
+                'max_path_length': 200,
                 'rotation_reward': 0.0,
-                'pickup_reward': 5.00,
-                'successful_drop_reward': 7.0,
+                'pickup_reward': 1.00,
+                'successful_drop_reward': 2.0,
                 'distance_penalty': 50.0
             }
         }
@@ -46,18 +46,18 @@ class ExperimentRunner:
         # GA configuration
         self.ga_config = {
             'mutation_prob': 0.15,
-            'delimited_mutation_prob': 0.10,
-            'open_mutation_prob': 0.05,
-            'capture_mutation_prob': 0.05,
+            'delimited_mutation_prob': 0.11,
+            'open_mutation_prob': 0.04,
+            'capture_mutation_prob': 0.03,
             'delimiter_insert_prob': 0.04,
             'delimit_delete_prob': 0.08,
             'crossover_prob': 0.00,
             'elitism_ratio': 0.00,
-            'base_gene_prob': 0.45,
-            'capture_gene_prob': 0.05,
-            'max_individual_length': 20,
-            'population_size': 700,
-            'num_parents': 300,
+            'base_gene_prob': 0.20,
+            'capture_gene_prob': 0.04,
+            'max_individual_length': 50,
+            'population_size': 500,
+            'num_parents': 200,
             'max_generations': 1000,
             'delimiters': False,
             'delimiter_space': 2,
