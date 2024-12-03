@@ -11,7 +11,7 @@ class ExperimentRunner:
         # Network configuration
         self.config = {
             'network_params': {
-                'volume_size': 70.0,
+                'volume_size': 50.0,
                 'num_input': 10,
                 'num_output': 20,
                 'total_neurons': 300,
@@ -26,10 +26,10 @@ class ExperimentRunner:
             },
             'path_rewards': {
                 'max_path_length': 100,
-                'pickup_reward': 1.0,
-                'successful_drop_reward': 6.0,
-                'distance_penalty': 20.0,
-                'proximity_factor': 2.0
+                'pickup_reward': 0.01,
+                'successful_drop_reward': 0.01,
+                'distance_penalty': 200.0,
+                'proximity_factor': 3.0
             }
         }
 
@@ -43,8 +43,8 @@ class ExperimentRunner:
             'delimit_delete_prob': 0.06,
             'crossover_prob': 0.00,
             'elitism_ratio': 0.00,
-            'base_gene_prob': 0.35,
-            'capture_gene_prob': 0.03,
+            'base_gene_prob': 0.40,
+            'capture_gene_prob': 0.05,
             'max_individual_length': 50,
             'population_size': 700,
             'num_parents': 300,
