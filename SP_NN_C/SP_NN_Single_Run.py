@@ -1,5 +1,3 @@
-# SP_NN_Single_Run.py
-
 import random
 import numpy as np
 from M_E_GA import M_E_GA_Base, M_E_Engine
@@ -10,54 +8,46 @@ class ExperimentRunner:
     def __init__(self, debug: bool = False, config_file=None):
         self.debug = debug
 
-        # Comprehensive configuration dictionary
+        # Network configuration
         self.config = {
             'network_params': {
-                # Core network structure
-                'volume_size': 30.0,
+                'volume_size': 60.0,
                 'num_input': 10,
                 'num_output': 20,
-                'total_neurons': 300,
-
-                # Neuron radius parameters
+                'total_neurons': 500,
                 'max_radius': 3.5,
                 'min_radius': 0.50,
                 'hidden_radius_range': (.5, 1.0),
-                'base_radius_shrink_rate': 0.95,
                 'input_radius_factor': 1.0,
                 'interface_radius_factor': 2.0,
-                'interface_offset': 1.0,
-
-                # Activation parameters
                 'activation_budget': 1000,
                 'time_window_size': 100,
-                'activation_threshold': 0.5,
-                'activation_radius_factor': 0.2
+                'activation_threshold': 0.5
             },
             'path_rewards': {
-                'max_path_length': 200,
-                'rotation_reward': 0.0,
-                'pickup_reward': 3.00,
+                'max_path_length': 100,
+                'pickup_reward': 1.0,
                 'successful_drop_reward': 6.0,
-                'distance_penalty': 20.0
+                'distance_penalty': 20.0,
+                'proximity_factor': 2.5
             }
         }
 
         # GA configuration
         self.ga_config = {
             'mutation_prob': 0.15,
-            'delimited_mutation_prob': 0.1,
-            'open_mutation_prob': 0.04,
+            'delimited_mutation_prob': 0.11,
+            'open_mutation_prob': 0.10,
             'capture_mutation_prob': 0.05,
             'delimiter_insert_prob': 0.04,
-            'delimit_delete_prob': 0.04,
+            'delimit_delete_prob': 0.06,
             'crossover_prob': 0.00,
             'elitism_ratio': 0.00,
-            'base_gene_prob': 0.45,
-            'capture_gene_prob': 0.03,
-            'max_individual_length': 100,
-            'population_size': 600,
-            'num_parents': 100,
+            'base_gene_prob': 0.35,
+            'capture_gene_prob': 0.04,
+            'max_individual_length': 50,
+            'population_size': 700,
+            'num_parents': 300,
             'max_generations': 1000,
             'delimiters': False,
             'delimiter_space': 2,
@@ -65,6 +55,7 @@ class ExperimentRunner:
             'experiment_name': 'neural_evolution',
             'seed': None
         }
+
 
         # Best solution tracking
         self.best_organism = {
@@ -81,46 +72,41 @@ class ExperimentRunner:
                 self.print_network_stats()
 
     def print_network_stats(self):
-        """Print detailed network statistics for debugging"""
-        if hasattr(self, 'fitness_function'):
-            stats = self.fitness_function.get_stats()
-            if self.debug:
-                print("\nNetwork Statistics:")
-                print(f"Connectivity: {stats['connectivity']['current']:.2f}%")
-                print(f"Unreachable neurons: {stats['connectivity']['unreachable_neurons']}")
-                print("\nNeuron Distribution:")
-                print(f"Total neurons: {stats['network']['total_neurons']}")
-                print(f"Input neurons: {stats['network']['input_neurons']}")
-                print(f"Hidden neurons: {stats['network']['hidden_neurons']}")
-                print(f"Output neurons: {stats['network']['output_neurons']}")
-                print("\nActivation Parameters:")
-                print(f"Activation budget: {self.config['network_params']['activation_budget']}")
-                print(f"Time window: {self.config['network_params']['time_window_size']}")
+        if not self.debug or not hasattr(self, 'fitness_function'):
+            return
+
+        stats = self.fitness_function.get_stats()
+        if 'health_metrics' in stats:
+            health = stats['health_metrics']
+            print(f"\nNetwork Health:")
+            print(f"Combined Health: {health['combined_health']:.1f}%")
+            print(f"Structural Connectivity: {health['structural_connectivity']:.1f}%")
+            print(f"Connection Density: {health['connection_density']:.1f}%")
 
     def setup_experiment(self):
+        # Define movement genes
+        self.movement_genes = ['U', 'D', 'F', 'B', 'L', 'R']
+        self.control_genes = ['SU', 'SD', 'TP', 'DR']
+        all_genes = self.movement_genes + self.control_genes
+
         # Create fitness function with update callback
         self.fitness_function = NetworkEvolutionFitness(
             config=self.config,
             update_best_func=self.update_best_organism,
-            debug=self.debug  # Pass debug flag to fitness function
+            debug=self.debug
         )
 
         # Initialize GA
         self.ga = M_E_GA_Base(
-            genes=self.fitness_function.genes,
+            genes=all_genes,
             fitness_function=lambda ind, ga_instance: self.fitness_function.compute(ind, ga_instance),
             **self.ga_config
         )
 
     def run_experiment(self):
         if self.debug:
-            print("Starting Neural Evolution Experiment...")
-            print("\nComprehensive Configuration:")
-            for section, params in self.config.items():
-                print(f"\n{section.replace('_', ' ').title()}:")
-                for key, value in params.items():
-                    print(f"  {key}: {value}")
-            print(f"\nPopulation size: {self.ga_config['population_size']}")
+            print("\nStarting Neural Evolution Experiment")
+            print(f"Population size: {self.ga_config['population_size']}")
             print(f"Max generations: {self.ga_config['max_generations']}\n")
 
         # Run the GA
@@ -129,16 +115,14 @@ class ExperimentRunner:
         # Get results
         best_genome = self.best_organism["genome"]
         best_fitness = self.best_organism["fitness"]
-        best_solution = self.ga.decode_organism(best_genome, format=True) if best_genome is not None else []
-
-        # Only print final results regardless of debug setting
-        print("\nExperiment Results:")
-        print(f"Best Solution: {best_solution}")
-        print(f"Best Fitness: {best_fitness}")
-        print(f"Solution Length: {len(best_solution)}")
+        best_solution = self.ga.decode_organism(best_genome) if best_genome else []
 
         if self.debug:
-            self.print_network_stats()  # Print final network statistics only in debug mode
+            print("\nExperiment Results:")
+            print(f"Best Solution: {best_solution}")
+            print(f"Best Fitness: {best_fitness}")
+            print(f"Solution Length: {len(best_solution)}")
+            self.print_network_stats()
 
         return {
             'best_genome': best_genome,
@@ -147,9 +131,18 @@ class ExperimentRunner:
         }
 
 
-if __name__ == "__main__":
-    # Create and run experiment with debug flag
-    debug_mode = False  # Set to True to enable debug output
-    experiment = ExperimentRunner(debug=debug_mode)
+def run_single_experiment(debug: bool = False, seed: int = None):
+    """Utility function to run a single experiment with optional debug and seed"""
+    if seed is not None:
+        random.seed(seed)
+        np.random.seed(seed)
+
+    experiment = ExperimentRunner(debug=debug)
     experiment.setup_experiment()
-    results = experiment.run_experiment()
+    return experiment.run_experiment()
+
+
+if __name__ == "__main__":
+    debug_mode = False  # Set to True only when debugging is needed
+    random_seed = 42  # Set to None for random initialization
+    results = run_single_experiment(debug=debug_mode, seed=random_seed)

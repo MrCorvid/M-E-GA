@@ -12,51 +12,28 @@ class FitnessEvaluator:
         self.evolution_system = evolution_system
         self.debug = debug
 
-        self.max_path_length = movement_rewards.get('max_path_length', 60)
-        self.rotation_reward = movement_rewards.get('rotation_reward', 0.5)
-        self.pickup_reward = movement_rewards.get('pickup_reward', 0.5)
-        self.successful_drop_reward = movement_rewards.get('successful_drop_reward', 5.0)
-        self.distance_penalty = movement_rewards.get('distance_penalty', 0.1)
-        self.proximity_factor = movement_rewards.get('proximity_factor', 1.2)
+        # Core parameters
+        self.max_path_length = movement_rewards.get('max_path_length', 200)
+        self.pickup_reward = movement_rewards.get('pickup_reward', 3.0)
+        self.successful_drop_reward = movement_rewards.get('successful_drop_reward', 6.0)
+        self.distance_penalty = movement_rewards.get('distance_penalty', 20.0)
+        self.proximity_factor = movement_rewards.get('proximity_factor', 1.5)
 
-    def compute_fitness(self, path: List[int]) -> float:
+    def compute_fitness(self, path: List[str]) -> float:
         try:
-            initial_health = self.evolution_system.get_network_stats()['health_metrics']
-            initial_combined_health = initial_health['combined_health']
-            initial_proximity = initial_health['proximity_score']
-
+            # Execute movement sequence and get results
             results = self.evolution_system.execute_movement_sequence(path)
             path_score = self.evaluate_path_execution(results)
 
-            final_health = results['network_health']
-            final_combined_health = final_health['combined_health']
-            final_proximity = final_health['proximity_score']
+            # Get network health metrics
+            health_metrics = results['network_health']
+            combined_health = health_metrics['combined_health']
 
-            health_delta = final_combined_health - initial_combined_health
-            proximity_delta = final_proximity - initial_proximity
-
-            normalized_health_delta = health_delta / 100.0
-            normalized_proximity_delta = proximity_delta / 100.0
-
-            combined_delta = (0.8 * normalized_health_delta +
-                              0.2 * normalized_proximity_delta)
-
-            if combined_delta > 0:
-                if path_score < 0:
-                    final_fitness = path_score / (1 + combined_delta)
-                else:
-                    final_fitness = path_score * (1 + combined_delta)
-            else:
-                if path_score < 0:
-                    final_fitness = path_score * (1 + abs(combined_delta))
-                else:
-                    final_fitness = path_score * (1 + combined_delta)
+            # Final fitness is path score scaled by network health
+            final_fitness = path_score * (combined_health * 3)
 
             if self.debug:
-                self._print_debug_info(path_score, initial_health, final_health,
-                                       health_delta, proximity_delta, final_fitness)
-
-            final_fitness *= (final_combined_health * 3)
+                self._print_debug_info(path_score, health_metrics, final_fitness)
 
             return final_fitness
 
@@ -66,43 +43,38 @@ class FitnessEvaluator:
             return -100.0
 
     def evaluate_path_execution(self, results: Dict) -> float:
+        """Evaluate the execution results of a movement sequence."""
         score = 0.0
 
+        # Reward proximity-based interactions
         if 'proximity_metrics' in results:
             proximity = results['proximity_metrics']
             avg_near = proximity.get('avg_near_connections', 0)
             score += avg_near * self.proximity_factor
 
-        score += results['rotations_made'] * self.rotation_reward
+        # Core rewards for successful actions
         score += results['pickups_made'] * self.pickup_reward
         score += results['successful_drops'] * self.successful_drop_reward
 
-        total_distance = results.get('path_length', 0)
-        if total_distance <= self.max_path_length:
-            score += total_distance
+        # Movement efficiency
+        moves_made = results.get('moves_made', 0)
+        if moves_made <= self.max_path_length:
+            score += moves_made
         else:
             score += self.max_path_length
-            distance_over = total_distance - self.max_path_length
-            penalty = distance_over * self.distance_penalty
-            score -= penalty
+            score -= (moves_made - self.max_path_length) * self.distance_penalty
 
         return score
 
-    def _print_debug_info(self, path_score: float, initial_health: Dict,
-                          final_health: Dict, health_delta: float,
-                          proximity_delta: float, final_fitness: float):
-        print("\nFitness Calculation Breakdown:")
-        print(f"Path Score: {path_score}")
-        print("\nNetwork Health Changes:")
-        print(f"Initial Combined Health: {initial_health['combined_health']:.1f}")
-        print(f"Initial Proximity Score: {initial_health['proximity_score']:.1f}")
-        print(f"Final Combined Health: {final_health['combined_health']:.1f}")
-        print(f"Final Proximity Score: {final_health['proximity_score']:.1f}")
-        print(f"\nHealth Delta: {health_delta:.1f}")
-        print(f"Proximity Delta: {proximity_delta:.1f}")
-        print(f"Final Fitness: {final_fitness:.3f}")
+    def _print_debug_info(self, path_score: float, health_metrics: Dict, final_fitness: float):
+        if not self.debug:
+            return
+
+        print("\nNetwork Health Stats:")
+        print(f"Structural: {health_metrics['structural_connectivity']:.1f}%")
+        print(f"Density: {health_metrics['connection_density']:.1f}%")
+        print(f"Health: {health_metrics['combined_health']:.1f}%")
+        print(f"Final Score: {final_fitness:.2f}\n")
 
     def get_stats(self) -> Dict:
-        if hasattr(self.evolution_system, 'get_current_state'):
-            return self.evolution_system.get_current_state()
-        return {}
+        return self.evolution_system.get_current_state()

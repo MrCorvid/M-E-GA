@@ -120,60 +120,38 @@ class NetworkEvolutionFitness:
     def compute(self, encoded_individual, ga_instance) -> float:
         """
         Fitness computation with comprehensive network health evaluation.
-
-        Args:
-            encoded_individual: The encoded genome representing the sequence of digits.
-            ga_instance: The genetic algorithm instance.
-
-        Returns:
-            float: The calculated fitness score.
         """
-        # Convert encoded individual to list of integers
-        if ga_instance:
-            # Decode organism and convert string digits to integers
-            path_str = ga_instance.decode_organism(encoded_individual)
-            path = [int(digit) for digit in path_str if digit.isdigit()]
-        else:
-            # Direct conversion if no GA instance
-            path = [int(digit) for digit in encoded_individual if str(digit).isdigit()]
+        try:
+            # Get the command sequence directly - no need for digit conversion
+            if ga_instance:
+                path = ga_instance.decode_organism(encoded_individual)
+            else:
+                path = encoded_individual
 
-        # Ensure path is not empty
-        if not path:
-            return 0.0
+            # Ensure path is not empty
+            if not path:
+                return 0.0
 
-        # Compute fitness using evaluator
-        fitness = self.evaluator.compute_fitness(path)
+            # Compute fitness using evaluator
+            fitness = self.evaluator.compute_fitness(path)
 
-        # Get comprehensive health metrics
-        health_metrics = self.evolution.get_network_stats()['health_metrics']
+            # Get comprehensive health metrics
+            health_metrics = self.evolution.get_network_stats()['health_metrics']
+            self._last_health_metrics = health_metrics
 
-        # Store for debugging and monitoring
-        self._last_health_metrics = health_metrics
-
-        # Check if we've achieved optimal network health
-        if health_metrics['combined_health'] >= 95:  # Using combined health threshold
             if self.debug:
-                print("\nExiting Phase 1: Achieved optimal network health")
-                print("\nFinal Health Metrics:")
-                print(f"Structural Connectivity: {health_metrics['structural_connectivity']:.1f}%")
-                print(f"Connection Density: {health_metrics['connection_density']:.1f}%")
-                print(f"Combined Health: {health_metrics['combined_health']:.1f}%")
-                print("\nNetwork Statistics:")
-                stats = self.get_stats()
-                print(f"Total Neurons: {stats['network']['total_neurons']}")
-                print(f"Path Length: {len(path)}")
-                print(f"Path: {''.join(map(str, path))}")
+                print(f"\nExecuting path: {path}")
+                print(f"Fitness: {fitness}")
+                self._print_debug_info(path, fitness, health_metrics)
 
-            # Exit the program since optimal health is achieved
-            sys.exit(0)
+            if self.update_best:
+                self.update_best(encoded_individual, fitness)
 
-        if self.debug:
-            self._print_debug_info(path, fitness, health_metrics)
+            return fitness
 
-        if self.update_best:
-            self.update_best(encoded_individual, fitness)
-
-        return fitness
+        except Exception as e:
+            print(f"Error in compute: {e}")
+            return 0.0
 
     def _print_debug_info(self, path: List[int], fitness: float, health_metrics: Dict):
         """Print comprehensive debug information about fitness and health metrics"""
@@ -193,25 +171,36 @@ class NetworkEvolutionFitness:
         if hasattr(self.navigator, 'command_history') and self.navigator.command_history:
             print("\nCommand Execution:")
             command_names = {
-                self.navigator.HEADING_X: "X-Heading",
-                self.navigator.HEADING_Y: "Y-Heading",
-                self.navigator.HEADING_Z: "Z-Heading",
-                self.navigator.MOVE: "Move",
+                self.navigator.UP: "Up",
+                self.navigator.DOWN: "Down",
+                self.navigator.FORWARD: "Forward",
+                self.navigator.BACK: "Back",
+                self.navigator.LEFT: "Left",
+                self.navigator.RIGHT: "Right",
+                self.navigator.SCALE_UP: "Scale Up",
+                self.navigator.SCALE_DOWN: "Scale Down",
+                self.navigator.TOGGLE_PICKUP: "Toggle Pickup",
                 self.navigator.DROP: "Drop"
             }
-            for cmd, mag in self.navigator.command_history:
+            for cmd, scale in self.navigator.command_history:
                 cmd_name = command_names.get(cmd, "Unknown")
-                print(f"{cmd_name}: {mag:.2f}")
+                if cmd in [self.navigator.TOGGLE_PICKUP, self.navigator.DROP]:
+                    print(f"{cmd_name}")
+                else:
+                    print(f"{cmd_name}: {scale:.2f}")
 
         # Print detailed health metadata if available
         if 'metadata' in health_metrics:
             meta = health_metrics['metadata']
             print("\nHealth Calculation Details:")
-            print(f"Density Margin: {meta['density_margin']}")
-            print(f"Structural Weight: {meta['structural_weight']}")
-            print(f"Density Weight: {meta['density_weight']}")
-            print(f"Raw Density: {meta['raw_density']:.1f}%")
-            print(f"Adjusted Density: {meta['adjusted_density']:.1f}%")
+            if 'structural_weight' in meta:
+                print(f"Structural Weight: {meta['structural_weight']}")
+            if 'density_weight' in meta:
+                print(f"Density Weight: {meta['density_weight']}")
+            if 'proximity_weight' in meta:
+                print(f"Proximity Weight: {meta['proximity_weight']}")
+            if 'raw_density' in meta:
+                print(f"Raw Density: {meta['raw_density']:.1f}%")
 
     def get_stats(self) -> Dict:
         """Get comprehensive statistics from all components"""
