@@ -354,8 +354,8 @@ class SpatialNeuralNetwork:
             }
 
     def compute_network_health(self) -> dict:
-        STRUCTURAL_WEIGHT = 0.40
-        DENSITY_WEIGHT = 0.40
+        STRUCTURAL_WEIGHT = 0.30
+        DENSITY_WEIGHT = 0.50
         PROXIMITY_WEIGHT = 0.20
 
         structural = self.compute_structural_connectivity()
