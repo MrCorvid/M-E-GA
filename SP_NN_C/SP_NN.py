@@ -162,7 +162,8 @@ class SpatialNeuralNetwork:
                         'position': (neuron.position.x, neuron.position.y, neuron.position.z),
                         'type': neuron.type,
                         'radius': neuron.radius,
-                        'activation': neuron.activation
+                        'activation': neuron.activation,
+                        'connections': [n.id for n in neuron.connections]  # Add connections list
                     }
                     for neuron in self.neurons.values()
                 }
@@ -354,9 +355,9 @@ class SpatialNeuralNetwork:
             }
 
     def compute_network_health(self) -> dict:
-        STRUCTURAL_WEIGHT = 0.55
-        DENSITY_WEIGHT = 0.40
-        PROXIMITY_WEIGHT = 0.05
+        STRUCTURAL_WEIGHT = 0.60
+        DENSITY_WEIGHT = 0.35
+        PROXIMITY_WEIGHT = 20.0
 
         structural = self.compute_structural_connectivity()
         density = self.compute_connection_density()

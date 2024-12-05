@@ -6,6 +6,8 @@ from tkinter import ttk
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from mpl_toolkits.mplot3d import Axes3D
+from matplotlib.collections import LineCollection
+from mpl_toolkits.mplot3d.art3d import Line3DCollection
 import numpy as np
 from dataclasses import dataclass
 
@@ -22,7 +24,9 @@ class NetworkMonitor:
         self.lock = threading.Lock()
         self.all_drops = []
         self.visualization_enabled = True
+        self.show_connections = True
         self.last_position = None
+        self.connection_collection = None
 
         # Start window in separate thread
         self.thread = threading.Thread(target=self.create_window, daemon=True)
@@ -101,6 +105,7 @@ class NetworkMonitor:
             self.control_frame = ttk.LabelFrame(self.frame, text="Visualization Controls", padding="5")
             self.control_frame.pack(fill=tk.X, pady=5)
 
+            # Main visualization toggle
             self.visualization_var = tk.BooleanVar(value=True)
             self.visualization_check = ttk.Checkbutton(
                 self.control_frame,
@@ -108,9 +113,19 @@ class NetworkMonitor:
                 variable=self.visualization_var,
                 command=self.toggle_visualization
             )
-            self.visualization_check.pack(pady=5)
+            self.visualization_check.pack(pady=2)
 
-            # 3D Plot setup
+            # Connection toggle
+            self.connections_var = tk.BooleanVar(value=True)
+            self.connections_check = ttk.Checkbutton(
+                self.control_frame,
+                text="Show Network Connections",
+                variable=self.connections_var,
+                command=self.toggle_connections
+            )
+            self.connections_check.pack(pady=2)
+
+            # Setup 3D plot
             self.setup_3d_plot()
 
             # Start queue checker
@@ -121,7 +136,7 @@ class NetworkMonitor:
             print(f"Error creating monitor window: {e}")
 
     def setup_3d_plot(self):
-        """Setup the 3D visualization plot"""
+        """Setup the 3D visualization plot."""
         self.fig = plt.Figure(figsize=(8, 8))
         self.ax = self.fig.add_subplot(111, projection='3d')
 
@@ -130,14 +145,12 @@ class NetworkMonitor:
         self.ax.set_ylim(-half_volume, half_volume)
         self.ax.set_zlim(-half_volume, half_volume)
 
-        self.ax.set_xlabel('X')
-        self.ax.set_ylabel('Y')
-        self.ax.set_zlabel('Z')
-        self.ax.set_title('Neural Network Structure')
+        # Disable axes, grid, and cube
+        self.ax.axis('off')  # Turns off all axes (including labels, ticks, and cube)
 
-        # Initialize plots
-        self.neuron_scatter = self.ax.scatter([], [], [], c='b', marker='o', s=50)
-        self.drop_scatter = self.ax.scatter([], [], [], c='r', marker='^', s=100)
+        # Initialize plots with smaller neuron nodes
+        self.neuron_scatter = self.ax.scatter([], [], [], c='b', marker='o', s=10)  # Smaller marker size
+        self.drop_scatter = self.ax.scatter([], [], [], c='r', marker='^', s=30)  # Adjust drop size if needed
         self.path_line, = self.ax.plot([], [], [], c='g', linewidth=2)
 
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.frame)
@@ -158,6 +171,26 @@ class NetworkMonitor:
         except Exception as e:
             print(f"Error checking queue: {e}")
 
+    def toggle_visualization(self):
+        """Toggle real-time visualization updates"""
+        self.visualization_enabled = self.visualization_var.get()
+        if not self.visualization_enabled:
+            self._clear_visualization()
+
+    def toggle_connections(self):
+        """Toggle network connection visibility"""
+        self.show_connections = self.connections_var.get()
+        if not self.show_connections:
+            self._clear_connections()
+
+    def update_neuron_positions(self, neurons: dict):
+        """Update neuron positions and connections"""
+        if self.visualization_enabled:
+            try:
+                self.queue.put({'type': 'neurons', 'data': neurons})
+            except Exception as e:
+                print(f"Error updating neurons: {e}")
+
     def update_health_metrics(self, metrics: dict):
         """Update all health metrics displays"""
         try:
@@ -165,16 +198,8 @@ class NetworkMonitor:
         except Exception as e:
             print(f"Error updating health metrics: {e}")
 
-    def update_neuron_positions(self, neurons: dict):
-        """Update neuron positions - only if visualization is enabled"""
-        if self.visualization_enabled:
-            try:
-                self.queue.put({'type': 'neurons', 'data': neurons})
-            except Exception as e:
-                print(f"Error updating neurons: {e}")
-
     def update_drop_locations(self, drops: list):
-        """Update drop locations - only if visualization is enabled"""
+        """Update drop locations"""
         if self.visualization_enabled:
             try:
                 self.queue.put({'type': 'drops', 'data': drops})
@@ -182,7 +207,7 @@ class NetworkMonitor:
                 print(f"Error updating drops: {e}")
 
     def update_path_step(self, position):
-        """Update path visualization - only if visualization is enabled"""
+        """Update path visualization"""
         if self.visualization_enabled:
             try:
                 self.queue.put({'type': 'path_step', 'position': position})
@@ -198,29 +223,30 @@ class NetworkMonitor:
                 print(f"Error clearing drops: {e}")
 
     def clear_path(self):
-        """Clear all path steps from visualization."""
-        self.path_steps = []
-        self.last_position = None
-        if hasattr(self, 'path_line'):
-            self.path_line.set_data([], [])
-            self.path_line.set_3d_properties([])
-            self.canvas.draw()
+        """Clear path visualization"""
+        try:
+            self.path_steps = []
+            self.last_position = None
+            if hasattr(self, 'path_line'):
+                self.path_line.set_data_3d([0], [0], [0])
+                self.canvas.draw()
+        except Exception as e:
+            print(f"Error clearing path: {e}")
 
-    def toggle_visualization(self):
-        """Toggle real-time visualization updates"""
-        self.visualization_enabled = self.visualization_var.get()
-        if not self.visualization_enabled:
-            self._clear_visualization()
+    def _clear_connections(self):
+        """Clear connection visualization without affecting other elements"""
+        if self.connection_collection is not None:
+            self.connection_collection.remove()
+            self.connection_collection = None
+            self.canvas.draw()
 
     def _handle_message(self, message: dict):
         """Process different message types"""
         try:
             message_type = message.get('type')
 
-            # Handle health metrics update
             if message_type == 'health_metrics':
                 self._update_health_metrics_display(message.get('data'))
-            # Only process visualization updates if enabled
             elif self.visualization_enabled:
                 if message_type == 'neurons':
                     self._update_neuron_positions_display(message.get('data'))
@@ -269,16 +295,44 @@ class NetworkMonitor:
             print(f"Error updating health metrics display: {e}")
 
     def _update_neuron_positions_display(self, neurons: dict):
-        """Update neuron positions in 3D plot"""
+        """Update neuron positions and connections in 3D plot."""
         try:
+            positions = {}
             xs, ys, zs = [], [], []
+
             for nid, data in neurons.items():
                 pos = data['position']
-                xs.append(pos[0])
-                ys.append(pos[1])
-                zs.append(pos[2])
+                if isinstance(pos, (tuple, list)):
+                    x, y, z = float(pos[0]), float(pos[1]), float(pos[2])
+                else:
+                    x, y, z = float(pos.x), float(pos.y), float(pos.z)
+
+                xs.append(x)
+                ys.append(y)
+                zs.append(z)
+                positions[nid] = (x, y, z)
 
             self.neuron_scatter._offsets3d = (xs, ys, zs)
+
+            if self.show_connections:
+                lines = []
+                for nid, data in neurons.items():
+                    if 'connections' in data:
+                        start = positions[nid]
+                        for target_id in data['connections']:
+                            if target_id in positions:
+                                end = positions[target_id]
+                                lines.append([start, end])
+
+                # Update or create Line3DCollection
+                if self.connection_collection is None:
+                    self.connection_collection = Line3DCollection(
+                        lines, colors='gray', linewidths=0.5, alpha=0.3
+                    )
+                    self.ax.add_collection3d(self.connection_collection)
+                else:
+                    self.connection_collection.set_segments(lines)
+
             self.canvas.draw()
         except Exception as e:
             print(f"Error updating neuron positions: {e}")
@@ -287,29 +341,34 @@ class NetworkMonitor:
         """Update drop locations in 3D plot"""
         try:
             for drop in drops:
-                self.all_drops.append(drop)
+                if hasattr(drop, 'x') and hasattr(drop, 'y') and hasattr(drop, 'z'):
+                    self.all_drops.append(drop)
 
-            xs = [drop.x for drop in self.all_drops]
-            ys = [drop.y for drop in self.all_drops]
-            zs = [drop.z for drop in self.all_drops]
+            if self.all_drops:
+                xs = [float(drop.x) for drop in self.all_drops]
+                ys = [float(drop.y) for drop in self.all_drops]
+                zs = [float(drop.z) for drop in self.all_drops]
+                self.drop_scatter._offsets3d = (xs, ys, zs)
+                self.canvas.draw()
 
-            self.drop_scatter._offsets3d = (xs, ys, zs)
-            self.canvas.draw()
         except Exception as e:
             print(f"Error updating drop locations: {e}")
 
     def _update_path_display(self, position):
         """Update path visualization"""
         try:
-            new_pos = (position.x, position.y, position.z)
-            self.path_steps.append(new_pos)
-            self.last_position = new_pos
+            if hasattr(position, 'x') and hasattr(position, 'y') and hasattr(position, 'z'):
+                # Handle Position object
+                self.path_steps.append((float(position.x), float(position.y), float(position.z)))
+            else:
+                # Handle tuple/list
+                self.path_steps.append((float(position[0]), float(position[1]), float(position[2])))
 
             if len(self.path_steps) > 1:
                 xs, ys, zs = zip(*self.path_steps)
-                self.path_line.set_data(xs, ys)
-                self.path_line.set_3d_properties(zs)
+                self.path_line.set_data_3d(xs, ys, zs)  # Use set_data_3d instead of separate calls
                 self.canvas.draw()
+
         except Exception as e:
             print(f"Error updating path display: {e}")
 
@@ -317,7 +376,11 @@ class NetworkMonitor:
         """Clear all drops from 3D plot"""
         try:
             self.all_drops = []
-            self.drop_scatter._offsets3d = ([], [], [])
+            # Create empty arrays explicitly for all three dimensions
+            empty_drops = np.array([[0, 0, 0]])  # Single point that won't be visible
+            self.drop_scatter._offsets3d = (empty_drops[:, 0],
+                                            empty_drops[:, 1],
+                                            empty_drops[:, 2])
             self.canvas.draw()
         except Exception as e:
             print(f"Error clearing drops: {e}")
@@ -332,6 +395,7 @@ class NetworkMonitor:
             if hasattr(self, 'path_line'):
                 self.path_line.set_data([], [])
                 self.path_line.set_3d_properties([])
+            self._clear_connections()
             self.path_steps = []
             self.all_drops = []
             self.canvas.draw()

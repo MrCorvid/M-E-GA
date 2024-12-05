@@ -16,7 +16,7 @@ class ExperimentRunner:
                 'num_output': 20,
                 'total_neurons': 300,
                 'max_radius': 3.5,
-                'min_radius': 0.90,
+                'min_radius': 1.0,
                 'hidden_radius_range': (.5, 1.0),
                 'input_radius_factor': 1.0,
                 'interface_radius_factor': 2.0,
@@ -26,8 +26,8 @@ class ExperimentRunner:
             },
             'path_rewards': {
                 'max_path_length': 100,
-                'pickup_reward': 0.01,
-                'successful_drop_reward': 0.01,
+                'pickup_reward': 0.5,
+                'successful_drop_reward': 0.5,
                 'distance_penalty': 200.0,
                 'proximity_factor': 3.0
             }
@@ -44,7 +44,7 @@ class ExperimentRunner:
             'crossover_prob': 0.00,
             'elitism_ratio': 0.00,
             'base_gene_prob': 0.40,
-            'capture_gene_prob': 0.05,
+            'capture_gene_prob': 0.03,
             'max_individual_length': 50,
             'population_size': 700,
             'num_parents': 300,
