@@ -30,7 +30,7 @@ class FitnessEvaluator:
             combined_health = health_metrics['combined_health']
 
             # Final fitness is path score scaled by network health
-            final_fitness = path_score * (combined_health * 3)
+            final_fitness = path_score * (combined_health *4)
 
             if self.debug:
                 self._print_debug_info(path_score, health_metrics, final_fitness)

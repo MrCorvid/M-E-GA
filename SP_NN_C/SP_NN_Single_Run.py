@@ -15,9 +15,9 @@ class ExperimentRunner:
                 'num_input': 10,
                 'num_output': 20,
                 'total_neurons': 300,
-                'max_radius': 3.5,
-                'min_radius': 1.0,
-                'hidden_radius_range': (.5, 1.0),
+                'max_radius': 5.,
+                'min_radius': 2.0,
+                'hidden_radius_range': (.8, 1.0),
                 'input_radius_factor': 1.0,
                 'interface_radius_factor': 2.0,
                 'activation_budget': 1000,
@@ -25,26 +25,26 @@ class ExperimentRunner:
                 'activation_threshold': 0.5
             },
             'path_rewards': {
-                'max_path_length': 100,
-                'pickup_reward': 0.5,
-                'successful_drop_reward': 0.5,
+                'max_path_length': 200,
+                'pickup_reward': 0.0,
+                'successful_drop_reward': 5.,
                 'distance_penalty': 200.0,
-                'proximity_factor': 3.0
+                'proximity_factor': 4.0
             }
         }
 
         # GA configuration
         self.ga_config = {
-            'mutation_prob': 0.15,
-            'delimited_mutation_prob': 0.11,
-            'open_mutation_prob': 0.10,
+            'mutation_prob': 0.10,
+            'delimited_mutation_prob': 0.05,
+            'open_mutation_prob': 0.06,
             'capture_mutation_prob': 0.05,
             'delimiter_insert_prob': 0.04,
-            'delimit_delete_prob': 0.06,
+            'delimit_delete_prob': 0.01,
             'crossover_prob': 0.00,
             'elitism_ratio': 0.00,
             'base_gene_prob': 0.40,
-            'capture_gene_prob': 0.03,
+            'capture_gene_prob': 0.05,
             'max_individual_length': 50,
             'population_size': 700,
             'num_parents': 300,

@@ -21,7 +21,7 @@ class NavigationSystem:
 
     def __init__(self, volume_size: float = 10.0, base_radius: float = 0.50):
         self.volume_size = max(1.0, float(volume_size))  # Ensure positive volume
-        self.base_radius = max(0.1, float(base_radius))  # Ensure positive radius
+        self.base_radius = max(1., float(base_radius))  # Ensure positive radius
 
         # Navigation state
         self.current_pos = Position(0.0, 0.0, 0.0)
@@ -63,9 +63,9 @@ class NavigationSystem:
     def _update_scale(self, command: str):
         """Update movement scale with bounds checking"""
         if command == self.SCALE_UP:
-            self.scale = min(32.0, self.scale * 2.0)  # Prevent overflow
+            self.scale = min(2.0, self.scale * 2.0)
         elif command == self.SCALE_DOWN:
-            self.scale = max(0.125, self.scale * 0.5)  # Prevent underflow
+            self.scale = max(0.50, self.scale * 0.5)
 
     def _move(self, command: str) -> Position:
         """Execute movement command with validated scaling"""
