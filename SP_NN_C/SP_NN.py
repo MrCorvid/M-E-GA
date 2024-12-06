@@ -355,9 +355,9 @@ class SpatialNeuralNetwork:
             }
 
     def compute_network_health(self) -> dict:
-        STRUCTURAL_WEIGHT = 0.20
-        DENSITY_WEIGHT = 0.60
-        PROXIMITY_WEIGHT = .20
+        STRUCTURAL_WEIGHT = 0.0
+        DENSITY_WEIGHT = 0.0
+        PROXIMITY_WEIGHT = 1.0
 
         structural = self.compute_structural_connectivity()
         density = self.compute_connection_density()
@@ -384,27 +384,33 @@ class SpatialNeuralNetwork:
         }
 
     def _compute_proximity_score(self) -> float:
-        """
-        Computes proximity score based on deviation from uniform distribution.
-        Higher score = further from uniform distribution (more clustered)
-        """
-        neurons = list(self.neurons.values())
-        if len(neurons) <= 1:
+        hidden_neurons = [n for n in self.neurons.values()
+                          if n.type == NeuronType.HIDDEN]
+
+        if len(hidden_neurons) <= 1:
             return 0.0
-            
-        # Calculate mean position and deviations
-        positions = np.array([[n.position.x, n.position.y, n.position.z] 
-                            for n in neurons])
-        mean_pos = np.mean(positions, axis=0)
-        
-        # Max possible distance is diagonal of volume
-        max_dist = np.sqrt(3 * (self.params.volume_size/2)**2)
-        deviations = np.linalg.norm(positions - mean_pos, axis=1)
-        
-        # Convert to score where higher = more clustered
-        proximity_score = (1.0 - np.mean(deviations) / max_dist) * 100.0
-        
-        return np.clip(proximity_score, 0.0, 100.0)
+
+        positions = np.array([[n.position.x, n.position.y, n.position.z]
+                              for n in hidden_neurons])
+        tree = KDTree(positions)
+
+        # Divide space into octants
+        octants = np.zeros(8)
+        half_size = self.params.volume_size / 2
+
+        for pos in positions:
+            idx = (pos >= 0).dot(1 << np.arange(3))
+            octants[idx] += 1
+
+        # Calculate entropy
+        probs = octants / len(positions)
+        probs = probs[probs > 0]  # Remove empty octants
+        entropy = -np.sum(probs * np.log2(probs))
+
+        # Max entropy for 8 octants is 3 bits
+        proximity_score = 100 * (1 - entropy / 3)
+
+        return max(0.0, proximity_score)
     
     def compute_structural_connectivity(self) -> float:
         """

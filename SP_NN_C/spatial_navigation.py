@@ -153,7 +153,7 @@ class NavigationSystem:
                 self.command_history.append((cmd, float(self.scale)))
 
             elif cmd == self.TOGGLE_PICKUP:
-                self.pickup_enabled = not self.pickup_enabled
+                self.pickup_enabled = True #not self.pickup_enabled
                 self._update_path_metrics(self.current_pos)
                 command_positions.append(current_pos_index)
                 self.command_history.append((cmd, 0))
