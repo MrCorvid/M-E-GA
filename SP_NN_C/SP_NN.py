@@ -384,35 +384,28 @@ class SpatialNeuralNetwork:
         }
 
     def _compute_proximity_score(self) -> float:
-        total_potential = 0
-        hidden_neurons = [n for n in self.neurons.values()
-                          if n.type == NeuronType.HIDDEN]
-
-        if len(hidden_neurons) <= 1:
+        """
+        Computes proximity score based on deviation from uniform distribution.
+        Higher score = further from uniform distribution (more clustered)
+        """
+        neurons = list(self.neurons.values())
+        if len(neurons) <= 1:
             return 0.0
-
-        positions = np.array([[n.position.x, n.position.y, n.position.z]
-                              for n in hidden_neurons])
-        tree = KDTree(positions)
-
-        proximity_radius = self.params.max_radius * 1.2
-
-        for i, neuron in enumerate(hidden_neurons):
-            neighbors = tree.query_ball_point(
-                [neuron.position.x, neuron.position.y, neuron.position.z],
-                proximity_radius
-            )
-
-            if i in neighbors:
-                neighbors.remove(i)
-
-            total_potential += len(neighbors)
-
-        max_potential = len(hidden_neurons) * (len(hidden_neurons) - 1) / 2
-        proximity_score = (total_potential / (2 * max_potential)) * 100
-
+            
+        # Calculate mean position and deviations
+        positions = np.array([[n.position.x, n.position.y, n.position.z] 
+                            for n in neurons])
+        mean_pos = np.mean(positions, axis=0)
+        
+        # Max possible distance is diagonal of volume
+        max_dist = np.sqrt(3 * (self.params.volume_size/2)**2)
+        deviations = np.linalg.norm(positions - mean_pos, axis=1)
+        
+        # Convert to score where higher = more clustered
+        proximity_score = (1.0 - np.mean(deviations) / max_dist) * 100.0
+        
         return np.clip(proximity_score, 0.0, 100.0)
-
+    
     def compute_structural_connectivity(self) -> float:
         """
         Computes structural connectivity using component counting via Union-Find algorithm.
