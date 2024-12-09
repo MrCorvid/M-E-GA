@@ -28,8 +28,8 @@ class Position:
 
     def distance_to(self, other: 'Position') -> float:
         return np.sqrt((self.x - other.x) ** 2 +
-                       (self.y - other.y) ** 2 +
-                       (self.z - other.z) ** 2)
+                      (self.y - other.y) ** 2 +
+                      (self.z - other.z) ** 2)
 
 
 @dataclass
@@ -355,9 +355,9 @@ class SpatialNeuralNetwork:
             }
 
     def compute_network_health(self) -> dict:
-        STRUCTURAL_WEIGHT = 0.0
-        DENSITY_WEIGHT = 0.0
-        PROXIMITY_WEIGHT = 1.0
+        STRUCTURAL_WEIGHT = 0.20
+        DENSITY_WEIGHT = 0.20
+        PROXIMITY_WEIGHT = .60
 
         structural = self.compute_structural_connectivity()
         density = self.compute_connection_density()
@@ -384,34 +384,49 @@ class SpatialNeuralNetwork:
         }
 
     def _compute_proximity_score(self) -> float:
-        hidden_neurons = [n for n in self.neurons.values()
-                          if n.type == NeuronType.HIDDEN]
+        hidden_neurons = [n for n in self.neurons.values() if n.type == NeuronType.HIDDEN]
 
+        # If we have 0 or 1 hidden neuron, they are trivially maximally clustered.
+        # That means zero entropy and a 100% proximity score.
         if len(hidden_neurons) <= 1:
-            return 0.0
+            return 100.0
 
         positions = np.array([[n.position.x, n.position.y, n.position.z]
                               for n in hidden_neurons])
-        tree = KDTree(positions)
 
-        # Divide space into octants
-        octants = np.zeros(8)
-        half_size = self.params.volume_size / 2
+        # Define number of bins per dimension. Adjust bins_per_dim for finer granularity.
+        bins_per_dim = 10  # Example: 4 bins per axis -> 64 total bins
+        half_volume = self.params.volume_size / 2
+        bins = np.linspace(-half_volume, half_volume, bins_per_dim + 1)
 
-        for pos in positions:
-            idx = (pos >= 0).dot(1 << np.arange(3))
-            octants[idx] += 1
+        # Compute 3D histogram
+        H, edges = np.histogramdd(positions, bins=(bins, bins, bins))
 
-        # Calculate entropy
-        probs = octants / len(positions)
-        probs = probs[probs > 0]  # Remove empty octants
-        entropy = -np.sum(probs * np.log2(probs))
+        # Flatten histogram and remove empty counts
+        counts = H.flatten()
+        counts = counts[counts > 0]  # Only consider occupied bins
 
-        # Max entropy for 8 octants is 3 bits
-        proximity_score = 100 * (1 - entropy / 3)
+        if len(counts) == 0:
+            # No neurons found in any bins, treat as fully clustered
+            return 100.0
 
-        return max(0.0, proximity_score)
-    
+        total_neurons = len(hidden_neurons)
+        p = counts / total_neurons
+
+        # Compute entropy
+        entropy = -np.sum(p * np.log2(p))
+
+        # Maximum entropy occurs if distribution is uniform across len(p) bins
+        max_entropy = np.log2(len(p)) if len(p) > 1 else 0.0
+
+        # normalized_entropy in [0,100], 0 = no entropy, 100 = max entropy
+        normalized_entropy = (entropy / max_entropy) * 100.0 if max_entropy > 0 else 0.0
+
+        # Our final metric: 100% at zero entropy, 0% at max entropy
+        metric = 100.0 - normalized_entropy
+
+        return np.clip(metric, 0.0, 100.0)
+
     def compute_structural_connectivity(self) -> float:
         """
         Computes structural connectivity using component counting via Union-Find algorithm.
@@ -490,6 +505,7 @@ class SpatialNeuralNetwork:
                 return max(0.0, min(density, 100.0))
             except ZeroDivisionError:
                 return 0.0
+
 
 def plot_network_with_weights(network: SpatialNeuralNetwork):
     fig = plt.figure(figsize=(12, 8))
@@ -640,8 +656,8 @@ def create_network(params: NetworkParameters) -> SpatialNeuralNetwork:
 if __name__ == "__main__":
     # Define consistent network parameters
     network_params = {
-        'volume_size': 8.0,
-        'num_input': 100,
+        'volume_size': 30.0,
+        'num_input': 200,
         'num_output': 4,
         'total_neurons': 500,
         'activation_budget': 1000,

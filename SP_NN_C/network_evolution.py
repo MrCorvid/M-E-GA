@@ -23,12 +23,11 @@ class NetworkEvolution:
         self.params = params
 
         # Evolution state
-        self.pickup_bag = deque(maxlen=20)  # Max 20 neurons can be carried
+        self.pickup_bag = deque(maxlen=200)  # Max neurons that can be carried
         self.processed_neurons = set()
         self.total_near_connections = 0
         self.proximity_samples = 0
         self._last_health_metrics = None
-        self.last_position = Position(0.0, 0.0, 0.0)
 
         # Start monitor updates if visualization is enabled
         if self.monitor and self.monitor.visualization_enabled:
@@ -41,8 +40,8 @@ class NetworkEvolution:
             self.proximity_samples = 0
             self.pickup_bag.clear()
 
-            # Initialize navigator with last position
-            self.navigator.reset_position(start_position=self.last_position)
+            # Always initialize navigator to origin
+            self.navigator.reset_position(start_position=Position(0.0, 0.0, 0.0))
 
             # Initialize visualization if enabled
             if self.monitor and self.monitor.visualization_enabled:
@@ -154,9 +153,6 @@ class NetworkEvolution:
                     self.monitor.update_path_step(current_pos)
                     time.sleep(0.05)
 
-            # Store final position for next evaluation
-            self.last_position = nav_results['final_position']
-
             # Apply updates
             if position_updates:
                 self.network.update_neuron_positions(position_updates)
@@ -232,10 +228,10 @@ class NetworkEvolution:
             'pickup_bag_size': len(self.pickup_bag),
             'total_steps': 0,
             'commands_executed': 0,
-            'positions': [self.navigator.current_pos],
+            'positions': [Position(0.0, 0.0, 0.0)],
             'path_length': 0.0,
-            'start_position': self.last_position,
-            'final_position': self.last_position,
+            'start_position': Position(0.0, 0.0, 0.0),
+            'final_position': Position(0.0, 0.0, 0.0),
             'network_health': self.network.compute_network_health(),
             'proximity_metrics': {
                 'total_near_connections': 0,

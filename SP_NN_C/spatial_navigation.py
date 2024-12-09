@@ -19,9 +19,11 @@ class NavigationSystem:
     TOGGLE_PICKUP = 'TP'
     DROP = 'DR'
 
-    def __init__(self, volume_size: float = 10.0, base_radius: float = 0.50):
+    def __init__(self, volume_size: float = 10.0, base_radius: float = 1.0):
         self.volume_size = max(1.0, float(volume_size))  # Ensure positive volume
-        self.base_radius = max(1., float(base_radius))  # Ensure positive radius
+        self.base_radius = max(1.0, float(base_radius))  # Ensure positive radius
+        self.min_radius = self.base_radius * 0.25  # Minimum radius limit
+        self.max_radius = self.base_radius * 2.0  # Maximum radius limit
 
         # Navigation state
         self.current_pos = Position(0.0, 0.0, 0.0)
@@ -63,9 +65,9 @@ class NavigationSystem:
     def _update_scale(self, command: str):
         """Update movement scale with bounds checking"""
         if command == self.SCALE_UP:
-            self.scale = min(2.0, self.scale * 2.0)
+            self.scale = min(10.0, self.scale * 2.0)
         elif command == self.SCALE_DOWN:
-            self.scale = max(0.50, self.scale * 0.5)
+            self.scale = max(0.25, self.scale * 0.5)
 
     def _move(self, command: str) -> Position:
         """Execute movement command with validated scaling"""
@@ -153,7 +155,7 @@ class NavigationSystem:
                 self.command_history.append((cmd, float(self.scale)))
 
             elif cmd == self.TOGGLE_PICKUP:
-                self.pickup_enabled = True #not self.pickup_enabled
+                self.pickup_enabled = not self.pickup_enabled
                 self._update_path_metrics(self.current_pos)
                 command_positions.append(current_pos_index)
                 self.command_history.append((cmd, 0))
@@ -188,5 +190,13 @@ class NavigationSystem:
 
     @property
     def agent_radius(self) -> float:
-        """Return the scaled interaction radius"""
-        return float(self.base_radius * self.scale)
+        """
+        Return the interaction radius with moderated scaling.
+        Uses sqrt of scale to create a more moderate scaling effect.
+        """
+        # Calculate moderated radius using square root scaling
+        moderated_scale = np.sqrt(self.scale)
+        radius = self.base_radius * moderated_scale
+
+        # Enforce minimum and maximum bounds
+        return float(np.clip(radius, self.min_radius, self.max_radius))
