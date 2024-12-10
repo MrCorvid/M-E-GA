@@ -25,9 +25,8 @@ class NetworkEvolution:
         # Evolution state
         self.pickup_bag = deque(maxlen=200)  # Max neurons that can be carried
         self.processed_neurons = set()
-        self.total_near_connections = 0
-        self.proximity_samples = 0
         self._last_health_metrics = None
+        self.last_position = Position(0.0, 0.0, 0.0)
 
         # Start monitor updates if visualization is enabled
         if self.monitor and self.monitor.visualization_enabled:
@@ -35,13 +34,11 @@ class NetworkEvolution:
 
     def execute_movement_sequence(self, path: List[str]) -> Dict:
         try:
-            # Reset metrics
-            self.total_near_connections = 0
-            self.proximity_samples = 0
+            # Reset pickup bag but keep position
             self.pickup_bag.clear()
 
-            # Always initialize navigator to origin
-            self.navigator.reset_position(start_position=Position(0.0, 0.0, 0.0))
+            # Use last position instead of resetting to origin
+            self.navigator.reset_position(start_position=self.last_position)
 
             # Initialize visualization if enabled
             if self.monitor and self.monitor.visualization_enabled:
@@ -59,6 +56,9 @@ class NetworkEvolution:
             positions = nav_results['positions']
             command_history = nav_results['command_history']
             command_positions = nav_results['command_positions']
+
+            # Store the final position for next evaluation
+            self.last_position = nav_results['final_position']
 
             # Setup neuron tracking
             available_neurons = [
@@ -91,10 +91,6 @@ class NetworkEvolution:
                     )
 
                     if nearby_indices:
-                        self.proximity_samples += 1
-                        direct_connections = 0
-                        near_connections = 0
-
                         for idx in nearby_indices:
                             nid = neuron_ids[idx]
                             if nid not in self.pickup_bag and nid not in position_updates:
@@ -103,15 +99,10 @@ class NetworkEvolution:
                                     neuron_pos_array[idx]
                                 )
                                 if distance <= self.navigator.agent_radius:
-                                    direct_connections += 1
                                     self.pickup_bag.append(nid)
-                                elif distance <= interaction_radius:
-                                    near_connections += 1
 
-                        self.total_near_connections += near_connections
-
-                        # Update available neurons
-                        if direct_connections:
+                        # Update available neurons if we picked any up
+                        if self.pickup_bag:
                             mask = np.ones(len(neuron_ids), dtype=bool)
                             for idx in nearby_indices:
                                 if neuron_ids[idx] in self.pickup_bag:
@@ -126,7 +117,6 @@ class NetworkEvolution:
 
                 # Handle drops
                 if command == self.navigator.DROP and self.pickup_bag:
-                    # Drop at current position exactly
                     drop_pos = Position(
                         x=current_pos.x,
                         y=current_pos.y,
@@ -163,10 +153,6 @@ class NetworkEvolution:
                 time.sleep(0.1)
                 self.monitor.clear_drops()
 
-            # Calculate metrics
-            avg_near_connections = (self.total_near_connections / self.proximity_samples
-                                    if self.proximity_samples > 0 else 0)
-
             return {
                 'moves_made': nav_results['moves_made'],
                 'pickups_made': len(position_updates),
@@ -180,21 +166,18 @@ class NetworkEvolution:
                 'path_length': nav_results['path_length'],
                 'start_position': nav_results['start_position'],
                 'final_position': nav_results['final_position'],
-                'network_health': self._last_health_metrics,
-                'proximity_metrics': {
-                    'total_near_connections': self.total_near_connections,
-                    'proximity_samples': self.proximity_samples,
-                    'avg_near_connections': avg_near_connections
-                }
+                'network_health': self._last_health_metrics
             }
 
         except Exception as e:
             return self._get_error_result()
 
     def calculate_connectivity(self) -> float:
+        """Calculate network connectivity score"""
         return self.get_network_stats()['health_metrics']['structural_connectivity']
 
     def get_network_stats(self) -> Dict:
+        """Get comprehensive network statistics"""
         state = self.network.get_network_state()
         health_metrics = self.network.compute_network_health()
         state.update({
@@ -204,21 +187,22 @@ class NetworkEvolution:
         return state
 
     def get_current_state(self) -> Dict:
+        """Get current state of the evolution process"""
         health_metrics = self.network.compute_network_health()
         return {
             'pickup_bag_size': len(self.pickup_bag),
             'processed_neurons': len(self.processed_neurons),
             'current_position': self.navigator.get_current_position(),
-            'health_metrics': health_metrics,
-            'proximity_metrics': {
-                'total_near_connections': self.total_near_connections,
-                'proximity_samples': self.proximity_samples,
-                'avg_near_connections': (self.total_near_connections / self.proximity_samples
-                                         if self.proximity_samples > 0 else 0)
-            }
+            'health_metrics': health_metrics
         }
 
+    def reset_position(self):
+        """Explicitly reset position to origin when needed"""
+        self.last_position = Position(0.0, 0.0, 0.0)
+        self.navigator.reset_position(start_position=self.last_position)
+
     def _get_error_result(self) -> Dict:
+        """Return error state result"""
         return {
             'moves_made': 0,
             'pickups_made': 0,
@@ -232,20 +216,17 @@ class NetworkEvolution:
             'path_length': 0.0,
             'start_position': Position(0.0, 0.0, 0.0),
             'final_position': Position(0.0, 0.0, 0.0),
-            'network_health': self.network.compute_network_health(),
-            'proximity_metrics': {
-                'total_near_connections': 0,
-                'proximity_samples': 0,
-                'avg_near_connections': 0
-            }
+            'network_health': self.network.compute_network_health()
         }
 
     def _update_network_health(self):
+        """Update network health metrics"""
         self._last_health_metrics = self.network.compute_network_health()
         if self.monitor:
             self.monitor.update_health_metrics(self._last_health_metrics)
 
     def _start_background_updates(self, update_interval: float = 1.0):
+        """Start background monitoring updates"""
         def update_loop():
             while True:
                 try:

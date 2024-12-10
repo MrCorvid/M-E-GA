@@ -356,8 +356,8 @@ class SpatialNeuralNetwork:
 
     def compute_network_health(self) -> dict:
         STRUCTURAL_WEIGHT = 0.20
-        DENSITY_WEIGHT = 0.20
-        PROXIMITY_WEIGHT = .60
+        DENSITY_WEIGHT = 0.30
+        PROXIMITY_WEIGHT = .50
 
         structural = self.compute_structural_connectivity()
         density = self.compute_connection_density()
@@ -384,48 +384,49 @@ class SpatialNeuralNetwork:
         }
 
     def _compute_proximity_score(self) -> float:
+        """
+        Compute smooth proximity score using KDE-based entropy estimation.
+        Returns 100% when all neurons are maximally clustered (minimum entropy),
+        0% when uniformly distributed (maximum entropy).
+        """
         hidden_neurons = [n for n in self.neurons.values() if n.type == NeuronType.HIDDEN]
 
-        # If we have 0 or 1 hidden neuron, they are trivially maximally clustered.
-        # That means zero entropy and a 100% proximity score.
+        # If we have 0 or 1 hidden neuron, they are trivially maximally clustered
         if len(hidden_neurons) <= 1:
             return 100.0
 
         positions = np.array([[n.position.x, n.position.y, n.position.z]
                               for n in hidden_neurons])
 
-        # Define number of bins per dimension. Adjust bins_per_dim for finer granularity.
-        bins_per_dim = 10  # Example: 4 bins per axis -> 64 total bins
-        half_volume = self.params.volume_size / 2
-        bins = np.linspace(-half_volume, half_volume, bins_per_dim + 1)
+        # Use KDTree for efficient neighbor density estimation
+        tree = KDTree(positions)
 
-        # Compute 3D histogram
-        H, edges = np.histogramdd(positions, bins=(bins, bins, bins))
+        # Compute distances to k-nearest neighbors for density estimation
+        k = min(len(positions) - 1, 5)  # Use up to 5 nearest neighbors
+        distances, _ = tree.query(positions, k=k + 1)  # +1 because first point is self
 
-        # Flatten histogram and remove empty counts
-        counts = H.flatten()
-        counts = counts[counts > 0]  # Only consider occupied bins
+        # Get mean distance to k nearest neighbors for each point
+        mean_distances = np.mean(distances[:, 1:], axis=1)  # Skip first column (self)
 
-        if len(counts) == 0:
-            # No neurons found in any bins, treat as fully clustered
+        # Compute local density estimates
+        volume = self.params.volume_size ** 3
+        densities = k / (mean_distances ** 3 * volume)
+
+        # Normalize densities to get probability distribution
+        p = densities / np.sum(densities)
+
+        # Calculate continuous entropy
+        entropy = -np.sum(p * np.log2(p + 1e-10))  # Add small epsilon to avoid log(0)
+
+        # Maximum entropy for this number of points
+        max_entropy = np.log2(len(positions))
+
+        # Normalize to get final score
+        if max_entropy == 0:
             return 100.0
 
-        total_neurons = len(hidden_neurons)
-        p = counts / total_neurons
-
-        # Compute entropy
-        entropy = -np.sum(p * np.log2(p))
-
-        # Maximum entropy occurs if distribution is uniform across len(p) bins
-        max_entropy = np.log2(len(p)) if len(p) > 1 else 0.0
-
-        # normalized_entropy in [0,100], 0 = no entropy, 100 = max entropy
-        normalized_entropy = (entropy / max_entropy) * 100.0 if max_entropy > 0 else 0.0
-
-        # Our final metric: 100% at zero entropy, 0% at max entropy
-        metric = 100.0 - normalized_entropy
-
-        return np.clip(metric, 0.0, 100.0)
+        normalized_entropy = entropy / max_entropy
+        return 100.0 * (1.0 - normalized_entropy)
 
     def compute_structural_connectivity(self) -> float:
         """

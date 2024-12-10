@@ -25,10 +25,10 @@ class ExperimentRunner:
                 'activation_threshold': 0.5
             },
             'path_rewards': {
-                'max_path_length': 100,
-                'pickup_reward': 2.0,
-                'successful_drop_reward': 4.,
-                'distance_penalty': 2.0
+                'max_path_length': 200,
+                'pickup_reward': 0.,
+                'successful_drop_reward': 3.,
+                'distance_penalty': 20.0
             }
         }
 
@@ -37,13 +37,13 @@ class ExperimentRunner:
             'mutation_prob': 0.15,
             'delimited_mutation_prob': 0.12,
             'open_mutation_prob': 0.05,
-            'capture_mutation_prob': 0.02,
-            'delimiter_insert_prob': 0.03,
+            'capture_mutation_prob': 0.03,
+            'delimiter_insert_prob': 0.04,
             'delimit_delete_prob': 0.02,
             'crossover_prob': 0.00,
             'elitism_ratio': 0.00,
-            'base_gene_prob': 0.35,
-            'capture_gene_prob': 0.03,
+            'base_gene_prob': 0.45,
+            'capture_gene_prob': 0.05,
             'max_individual_length': 50,
             'population_size': 700,
             'num_parents': 400,
