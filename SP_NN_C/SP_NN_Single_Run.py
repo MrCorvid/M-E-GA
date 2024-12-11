@@ -26,24 +26,24 @@ class ExperimentRunner:
             },
             'path_rewards': {
                 'max_path_length': 200,
-                'pickup_reward': 0.,
-                'successful_drop_reward': 3.,
-                'distance_penalty': 20.0
+                'pickup_reward': 5.,
+                'successful_drop_reward': 5.,
+                'step_penalty': 10.0
             }
         }
 
         # GA configuration
         self.ga_config = {
             'mutation_prob': 0.15,
-            'delimited_mutation_prob': 0.12,
+            'delimited_mutation_prob': 0.10,
             'open_mutation_prob': 0.05,
             'capture_mutation_prob': 0.03,
             'delimiter_insert_prob': 0.04,
-            'delimit_delete_prob': 0.02,
+            'delimit_delete_prob': 0.04,
             'crossover_prob': 0.00,
             'elitism_ratio': 0.00,
             'base_gene_prob': 0.45,
-            'capture_gene_prob': 0.05,
+            'capture_gene_prob': 0.00,
             'max_individual_length': 50,
             'population_size': 700,
             'num_parents': 400,
