@@ -66,14 +66,19 @@ class M_E_GA_Base:
             metagene_prob=0.0,
             fitness_evaluator=None,
             lru_cache_size=100,
+            parallel_processing=False,
+            use_threads=False,
+            checkpoint_filename=None,
+            resume=False,
+            initial_population=None,
+            initial_metagene_population=None,
             **kwargs
     ):
         """
         Initialize the genetic algorithm with configuration parameters.
 
         :param genes: A list of available base gene strings.
-        :param fitness_function: A callable for evaluating individual fitness
-                                 (used if fitness_evaluator is None).
+        :param fitness_function: A callable for evaluating individual fitness.
         :param mutation_prob: Base probability for point mutations.
         :param delimited_mutation_prob: Mutation probability for genes inside delimiters.
         :param delimit_delete_prob: Probability of deleting delimiter pairs.
@@ -88,7 +93,7 @@ class M_E_GA_Base:
         :param num_parents: The number of parents used in reproduction.
         :param max_generations: How many generations to run the GA.
         :param delimiters: Whether to include Start/End delimiters in random organisms.
-        :param delimiter_space: The spacing for random insertion of delimiters in new organisms.
+        :param delimiter_space: The spacing for random insertion of delimiters.
         :param logging: Enable or disable all logging.
         :param generation_logging: If True, logs generation summaries.
         :param mutation_logging: If True, logs each mutation event in detail.
@@ -101,9 +106,14 @@ class M_E_GA_Base:
         :param after_population_selection: A callable invoked after population selection.
         :param before_generation_finalize: A callable invoked before the generation finalizes.
         :param metagene_prob: Additional weighting factor used for meta-gene selection.
-        :param fitness_evaluator: An object that handles population-level fitness evaluation
-                                  (overrides fitness_function if provided).
+        :param fitness_evaluator: An object that handles population-level fitness evaluation.
         :param lru_cache_size: The size of the LRU cache for metagene usage.
+        :param parallel_processing: Flag to enable parallel processing for fitness evaluation. Defaults to False.
+        :param checkpoint_filename: Filename to store GA state between generations.
+        :param resume: If True, attempt to load state from the checkpoint file.
+        :param initial_population: Optionally supply an initial population (list of encoded organisms).
+        :param initial_metagene_population: Optionally supply initial metagene state as a dict with keys:
+            "meta_genes", "meta_gene_stack", "metagene_usage", "deletion_basket", "unused_encodings", and optionally "gene_counter_ref".
         :param kwargs: Additional arguments that might be used in extended setups.
         """
         self.genes = genes
@@ -141,11 +151,14 @@ class M_E_GA_Base:
         self.delimiter_space = delimiter_space
         self.seed = seed
 
+        # New state variables for resuming and checkpointing
         self.population = []
         self.current_generation = 0
         self.fitness_scores = []
-
         self.lru_cache_size = lru_cache_size
+        self.parallel_processing = parallel_processing
+        self.use_threads = use_threads
+        self.checkpoint_filename = checkpoint_filename if checkpoint_filename is not None else "ga_checkpoint.json"
 
         # Seed the RNG if provided
         if seed is not None:
@@ -154,7 +167,6 @@ class M_E_GA_Base:
         # Setup real-time event logger if logging is on
         if self.logging:
             if self.experiment_name is None:
-                # Could prompt or default
                 self.experiment_name = "UnnamedExperiment"
             self.logger = GA_Logger(self.experiment_name)
         else:
@@ -182,6 +194,24 @@ class M_E_GA_Base:
             individual_logging=self.individual_logging,
             logger=self.logger
         )
+
+        # Initialize initial population and/or metagene population if provided (and not resuming)
+        if not resume:
+            if initial_population is not None:
+                self.population = initial_population
+
+            if initial_metagene_population is not None and isinstance(initial_metagene_population, dict):
+                self.encoding_manager.meta_genes = initial_metagene_population.get("meta_genes", [])
+                self.encoding_manager.meta_gene_stack = initial_metagene_population.get("meta_gene_stack", [])
+                from collections import OrderedDict
+                self.encoding_manager.meta_manager.metagene_usage = OrderedDict(initial_metagene_population.get("metagene_usage", {}))
+                self.encoding_manager.meta_manager.deletion_basket = initial_metagene_population.get("deletion_basket", {})
+                self.encoding_manager.unused_encodings = initial_metagene_population.get("unused_encodings", [])
+                self.encoding_manager.gene_counter_ref = initial_metagene_population.get("gene_counter_ref", self.encoding_manager.gene_counter_ref)
+
+        # If resuming, try to load the checkpoint state which will override any initial population definitions.
+        if resume:
+            self.load_checkpoint()
 
     def decode_organism(self, encoded_organism, format=False):
         """
@@ -223,94 +253,170 @@ class M_E_GA_Base:
         """
         self.population = self.population_manager.initialize_population()
         return self.population
+    
+    def append_generation_log(self, generation, fitness_scores, population):
+        """
+        Append a summary of the current generation's fitness data to a single compiled log file.
+        The log entry includes generation number, timestamp, average/median/best/worst fitness, 
+        and a small sample of the population.
+        """
+        import os, json, datetime
+
+        log_folder = "logs_and_log_tools"
+        if not os.path.exists(log_folder):
+            os.makedirs(log_folder)
+        # Use a consistent filename so all generation logs compile into one file.
+        log_filename = os.path.join(log_folder, f"{self.experiment_name}_compiled_log.json")
+
+        # Create a generation log entry.
+        generation_entry = {
+            "generation": generation,
+            "timestamp": datetime.datetime.now().isoformat(),
+            "average_fitness": sum(fitness_scores) / len(fitness_scores) if fitness_scores else 0,
+            "median_fitness": sorted(fitness_scores)[len(fitness_scores)//2] if fitness_scores else 0,
+            "best_fitness": max(fitness_scores) if fitness_scores else 0,
+            "worst_fitness": min(fitness_scores) if fitness_scores else 0,
+            "population_sample": population[:5]  # Optionally store a sample of the population.
+        }
+
+        # Load previous log entries if the file exists.
+        if os.path.exists(log_filename):
+            with open(log_filename, 'r') as f:
+                log_data = json.load(f)
+        else:
+            log_data = []
+
+        log_data.append(generation_entry)
+
+        with open(log_filename, 'w') as f:
+            json.dump(log_data, f, indent=4)
 
     def run_algorithm(self):
-        """
-        Execute the genetic algorithm for max_generations iterations.
-
-        1. Initialize population
-        2. For each generation:
-            a) Log the generation start
-            b) Evaluate fitness
-            c) Log generation stats
-            d) Generate new population
-            e) Possibly log additional individual stats
-        3. Dump logs, print final encodings
-        """
-        # 1. Initialize population if empty
+        # 1. Initialize population if empty.
         if not self.population:
             self.population = self.population_manager.initialize_population()
 
-        # 2. Main loop
-        for generation in range(self.max_generations):
-            self.current_generation = generation
-            # Start new generation log
-            self.logging_manager.start_new_generation_logging(generation)
+        try:
+            for generation in range(self.current_generation, self.max_generations):
+                self.current_generation = generation
+                # Start generation-level logging.
+                self.logging_manager.start_new_generation_logging(generation)
+                self.encoding_manager.start_new_generation()
 
-            # Start new generation in encoding manager (for LRU usage/deletion)
-            self.encoding_manager.start_new_generation()
+                # Evaluate fitness.
+                self.fitness_scores = self.population_manager.evaluate_population_fitness(self.population)
 
-            # Evaluate fitness
-            self.fitness_scores = self.population_manager.evaluate_population_fitness(self.population)
+                # Compute summary statistics.
+                if self.fitness_scores:
+                    avg_fit = sum(self.fitness_scores) / len(self.fitness_scores)
+                    med_fit = sorted(self.fitness_scores)[len(self.fitness_scores)//2]
+                    best_fit = max(self.fitness_scores)
+                    worst_fit = min(self.fitness_scores)
+                else:
+                    avg_fit = med_fit = best_fit = worst_fit = 0
 
-            # Generation summary log
-            self.logging_manager.log_generation(generation, self.fitness_scores, self.population)
+                # Instead of using root logger directly, log the generation summary event via GA_Logger.
+                generation_summary = {
+                    "generation": generation,
+                    "average_fitness": avg_fit,
+                    "median_fitness": med_fit,
+                    "best_fitness": best_fit,
+                    "worst_fitness": worst_fit,
+                    # Optionally, add a small sample of the population (or other data)
+                    "population_sample": self.population[:5]
+                }
+                self.logger.log_event("generation_summary", generation_summary)
 
-            # Print short info
-            avg_fit = sum(self.fitness_scores) / len(self.fitness_scores)
-            print(f"Generation {generation}: Average Fitness = {avg_fit}")
+                # Generate new population.
+                self.population = self.population_manager.select_and_generate_new_population(
+                    self.population, self.fitness_scores, generation
+                )
 
-            # Generate next population
-            self.population = self.population_manager.select_and_generate_new_population(
-                self.population, self.fitness_scores, generation
-            )
+                # Optional user callback.
+                if self.before_generation_finalize:
+                    self.before_generation_finalize(self)
 
-            # Optional user callback
-            if self.before_generation_finalize:
-                self.before_generation_finalize(self)
+                # Optionally log individual fitness details.
+                self.logging_manager.individual_logging_fitness(generation, self.population, self.fitness_scores)
 
-            # If individual logging is on, store each individual's data
-            self.logging_manager.individual_logging_fitness(generation, self.population, self.fitness_scores)
+                # Save compiled logger events to a unified log file.
+                self.logger.save()
+                # Save checkpoint for recovery.
+                self.save_checkpoint()
 
-        # 3. After finishing all generations
+        except KeyboardInterrupt:
+            print("Experiment interrupted. Saving checkpoint and logs.")
+            self.save_checkpoint()
+            self.logger.save()
+            raise
+
+        # End-of-experiment final logging.
         print(self.encoding_manager.encodings)
-
         if self.logging:
             final_log = {
-                "initial_configuration": {
-                    "MUTATION_PROB": self.mutation_prob,
-                    "DELIMITED_MUTATION_PROB": self.delimited_mutation_prob,
-                    "DELIMIT_DELETE_PROB": self.delimit_delete_prob,
-                    "OPEN_MUTATION_PROB": self.open_mutation_prob,
-                    "CAPTURE_MUTATION_PROB": self.metagene_mutation_prob,
-                    "DELIMITER_INSERT_PROB": self.delimiter_insert_prob,
-                    "CROSSOVER_PROB": self.crossover_prob,
-                    "ELITISM_RATIO": self.elitism_ratio,
-                    "BASE_GENE_PROB": self.base_gene_prob,
-                    "CAPTURED_GENE_PROB": self.metagene_prob,
-                    "MAX_INDIVIDUAL_LENGTH": self.max_individual_length,
-                    "POPULATION_SIZE": self.population_size,
-                    "NUM_PARENTS": self.num_parents,
-                    "MAX_GENERATIONS": self.max_generations,
-                    "DELIMITERS": self.delimiters,
-                    "DELIMITER_SPACE": self.delimiter_space,
-                    "seed": self.seed,
-                },
+                "initial_configuration": { ... },  # your existing config here
                 "final_population": self.population,
                 "final_fitness_scores": self.fitness_scores,
                 "genes": self.genes,
                 "final_encodings": self.encoding_manager.encodings,
-                "logs": self.logging_manager.get_logs()  # Grab everything from the LoggingManager
+                "compiled_logs": self.logging_manager.get_logs()
             }
             log_folder = "logs_and_log_tools"
             if not os.path.exists(log_folder):
                 os.makedirs(log_folder)
-            log_filename = (f"{log_folder}/{self.experiment_name}_"
-                            f"{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.json")
-
-            with open(log_filename, 'w') as f:
+            final_log_filename = os.path.join(log_folder, f"{self.experiment_name}_final_log_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.json")
+            with open(final_log_filename, 'w') as f:
                 json.dump(final_log, f, indent=4)
 
-            # Also save the GA_Logger events if it exists
             if self.logger:
                 self.logger.save()
+
+    def save_checkpoint(self):
+        """
+        Save a minimal checkpoint of the GA state to a file.
+        Only data necessary for resuming (e.g. current generation, population, and encoding state)
+        is stored. Recalculated data (e.g. logs) are not persisted.
+        """
+        checkpoint_data = {
+            "current_generation": self.current_generation,
+            "population": self.population,
+            "encoding_manager_state": {
+                "encodings": self.encoding_manager.encodings,
+                "reverse_encodings": self.encoding_manager.reverse_encodings,
+                "meta_genes": self.encoding_manager.meta_genes,
+                "meta_gene_stack": self.encoding_manager.meta_gene_stack,
+                # Convert the OrderedDict to a list of tuples for JSON serialization
+                "metagene_usage": list(self.encoding_manager.meta_manager.metagene_usage.items()),
+                "deletion_basket": self.encoding_manager.meta_manager.deletion_basket,
+                "unused_encodings": self.encoding_manager.unused_encodings,
+                "gene_counter_ref": self.encoding_manager.gene_counter_ref
+            }
+        }
+        with open(self.checkpoint_filename, "w") as f:
+            json.dump(checkpoint_data, f, indent=4)
+
+    def load_checkpoint(self, filename=None):
+        """
+        Load the GA state from a checkpoint file.
+        Updates the current generation, population, and encoding manager state.
+        """
+        filename = filename if filename else self.checkpoint_filename
+        if os.path.exists(filename):
+            with open(filename, "r") as f:
+                checkpoint_data = json.load(f)
+            self.current_generation = checkpoint_data.get("current_generation", 0)
+            self.population = checkpoint_data.get("population", [])
+            encoding_state = checkpoint_data.get("encoding_manager_state", {})
+            self.encoding_manager.encodings = encoding_state.get("encodings", {})
+            self.encoding_manager.reverse_encodings = encoding_state.get("reverse_encodings", {})
+            self.encoding_manager.meta_genes = encoding_state.get("meta_genes", [])
+            self.encoding_manager.meta_gene_stack = encoding_state.get("meta_gene_stack", [])
+            from collections import OrderedDict
+            metagene_usage_list = encoding_state.get("metagene_usage", [])
+            self.encoding_manager.meta_manager.metagene_usage = OrderedDict(metagene_usage_list)
+            self.encoding_manager.meta_manager.deletion_basket = encoding_state.get("deletion_basket", {})
+            self.encoding_manager.unused_encodings = encoding_state.get("unused_encodings", [])
+            self.encoding_manager.gene_counter_ref = encoding_state.get("gene_counter_ref", [3])
+            print(f"Checkpoint loaded from {filename}.")
+        else:
+            print(f"No checkpoint file found at {filename}.")

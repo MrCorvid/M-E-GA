@@ -1,35 +1,17 @@
-"""
-population_manager.py
-
-Handles population-level operations: initialization, fitness evaluation,
-and generating the next generation via selection, elitism, crossover, and mutation.
-"""
-
 import random
+import concurrent.futures
+from functools import partial
+import logging
+from concurrent.futures import ThreadPoolExecutor
 
+def evaluate_individual_fitness(individual, fitness_function, ga_instance):
+    return fitness_function(individual, ga_instance)
 
 class PopulationManager:
-    """
-    PopulationManager is responsible for:
-      - Initializing a population
-      - Evaluating fitness (in conjunction with a fitness function or evaluator)
-      - Selecting parents, applying crossover/mutation, and building the new generation.
-    """
-
     def __init__(self, ga_instance):
-        """
-        Initialize the PopulationManager with a reference to the GA instance.
-
-        :param ga_instance: The main M_E_GA_Base instance that orchestrates everything.
-        """
         self.ga = ga_instance
 
     def initialize_population(self):
-        """
-        Generate an initial population of organisms.
-
-        :return: A list of organism encodings representing the initial population.
-        """
         population = []
         for _ in range(int(self.ga.population_size)):
             individual_length = random.randint(2, self.ga.max_individual_length)
@@ -43,75 +25,66 @@ class PopulationManager:
         return population
 
     def evaluate_population_fitness(self, population):
-        """
-        Evaluate the fitness of the entire population.
-
-        This method optionally calls a pre-evaluation callback, evaluates the population
-        using the fitness evaluator, and then calls a post-evaluation callback.
-
-        :param population: The list of organisms to evaluate.
-        :return: A list of fitness scores for the population.
-        """
         if self.ga.before_fitness_evaluation:
             self.ga.before_fitness_evaluation(self.ga)
 
-        # If we have a dedicated fitness evaluator object, let that handle evaluations:
-        if self.ga.fitness_evaluator is not None:
-            fitness_scores = self.ga.fitness_evaluator.evaluate(population, self.ga)
+        # Log that we are starting fitness evaluation.
+        import logging
+        logging.debug(f"Starting fitness evaluation for {len(population)} individuals. "
+                    f"parallel_processing={self.ga.parallel_processing}")
+
+        # Choose evaluation strategy based on configuration.
+        if self.ga.parallel_processing:
+            # Choose between thread or process executor.
+            if hasattr(self.ga, 'use_threads') and self.ga.use_threads:
+                executor_class = ThreadPoolExecutor
+                kwargs = {}  # No chunksize for threads.
+            else:
+                executor_class = concurrent.futures.ProcessPoolExecutor
+                kwargs = {'chunksize': 10}  # Increase chunksize to reduce overhead.
+            
+            with executor_class() as executor:
+                if self.ga.fitness_evaluator is not None:
+                    func = partial(evaluate_individual_fitness,
+                                fitness_function=self.ga.fitness_evaluator.evaluate,
+                                ga_instance=self.ga)
+                else:
+                    func = partial(evaluate_individual_fitness,
+                                fitness_function=self.ga.fitness_function,
+                                ga_instance=self.ga)
+                fitness_scores = list(executor.map(func, population, **kwargs))
         else:
-            # Otherwise, fallback to the fitness_function callable
-            fitness_scores = [self.ga.fitness_function(ind, self.ga) for ind in population]
+            if self.ga.fitness_evaluator is not None:
+                fitness_scores = self.ga.fitness_evaluator.evaluate(population, self.ga)
+            else:
+                fitness_scores = [self.ga.fitness_function(ind, self.ga) for ind in population]
 
         if self.ga.after_population_selection:
             self.ga.after_population_selection(self.ga)
 
+        logging.debug(f"Finished fitness evaluation. Calculated scores: {fitness_scores}")
+
         return fitness_scores
 
     def select_and_generate_new_population(self, population, fitness_scores, generation):
-        """
-        Select individuals and generate a new population through reproduction.
-
-        Implements:
-          - Elitism
-          - Parent selection
-          - Crossover
-          - Mutation
-
-        :param population: Current population of organisms.
-        :param fitness_scores: List of corresponding fitness scores.
-        :param generation: Current generation number (used for logging).
-        :return: The new population of organisms (list of encodings).
-        """
-        # Sort population by fitness
+        # ... (existing selection, crossover, and mutation code) ...
         sorted_population = sorted(zip(population, fitness_scores),
                                    key=lambda x: x[1], reverse=True)
-
-        # Get elites
         num_elites = int(self.ga.elitism_ratio * self.ga.population_size)
         elites = [individual for (individual, _) in sorted_population[:num_elites]]
-
         new_population = elites[:]
-
-        # Prepare the pool of parents
         selected_parents = [individual for (individual, _) in sorted_population[:self.ga.num_parents]]
         shift = 0
-
-        # Keep filling the new population until it hits target size
         while len(new_population) < self.ga.population_size:
             for i in range(0, len(selected_parents) - 1, 2):
-                # We do a small shift each iteration to vary pairings
                 parent1_index = (i + shift) % len(selected_parents)
                 parent2_index = (i + 1 + shift) % len(selected_parents)
                 parent1 = selected_parents[parent1_index]
                 parent2 = selected_parents[parent2_index]
-
-                # If fully delimited, skip crossover+mutation
                 if self.ga.crossover_manager.is_fully_delimited(parent1) or \
-                        self.ga.crossover_manager.is_fully_delimited(parent2):
+                   self.ga.crossover_manager.is_fully_delimited(parent2):
                     new_population.extend([parent1, parent2][:self.ga.population_size - len(new_population)])
                     continue
-
-                # Possibly apply crossover
                 if random.random() < self.ga.crossover_prob:
                     non_del_indices = self.ga.crossover_manager.get_non_delimiter_indices(parent1, parent2)
                     offspring1, offspring2 = self.ga.crossover_manager.crossover(
@@ -119,20 +92,10 @@ class PopulationManager:
                     )
                 else:
                     offspring1, offspring2 = parent1[:], parent2[:]
-
-                # Updated references to the logging manager
                 self.ga.logging_manager.log_new_organism(offspring1)
                 self.ga.logging_manager.log_new_organism(offspring2)
-
-                # Mutate
                 offspring1 = self.ga.mutation_manager.mutate_organism(offspring1, generation)
                 offspring2 = self.ga.mutation_manager.mutate_organism(offspring2, generation)
-
-                # Add them
-                new_population.extend(
-                    [offspring1, offspring2][:self.ga.population_size - len(new_population)]
-                )
-
+                new_population.extend([offspring1, offspring2][:self.ga.population_size - len(new_population)])
             shift += 1
-
         return new_population
