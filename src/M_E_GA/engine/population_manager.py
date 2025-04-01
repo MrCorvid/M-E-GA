@@ -1,8 +1,11 @@
 import random
 import concurrent.futures
 from functools import partial
-import logging
+# Removed: import logging
 from concurrent.futures import ThreadPoolExecutor
+
+# Import LoggingManager
+from ...networkCommon.logging_manager import LoggingManager, VERBOSE_LEVEL_NUM # Corrected import path
 
 def evaluate_individual_fitness(individual, fitness_function, ga_instance):
     return fitness_function(individual, ga_instance)
@@ -29,9 +32,9 @@ class PopulationManager:
             self.ga.before_fitness_evaluation(self.ga)
 
         # Log that we are starting fitness evaluation.
-        import logging
-        logging.debug(f"Starting fitness evaluation for {len(population)} individuals. "
-                    f"parallel_processing={self.ga.parallel_processing}")
+        # Removed: import logging
+        LoggingManager.debug(f"Starting fitness evaluation for {len(population)} individuals. " # Updated
+                    f"parallel_processing={self.ga.parallel_processing}", name="MEGA.PopulationManager")
 
         # Choose evaluation strategy based on configuration.
         if self.ga.parallel_processing:
@@ -42,7 +45,7 @@ class PopulationManager:
             else:
                 executor_class = concurrent.futures.ProcessPoolExecutor
                 kwargs = {'chunksize': 10}  # Increase chunksize to reduce overhead.
-            
+
             with executor_class() as executor:
                 if self.ga.fitness_evaluator is not None:
                     func = partial(evaluate_individual_fitness,
@@ -62,7 +65,7 @@ class PopulationManager:
         if self.ga.after_population_selection:
             self.ga.after_population_selection(self.ga)
 
-        logging.debug(f"Finished fitness evaluation. Calculated scores: {fitness_scores}")
+        LoggingManager.debug(f"Finished fitness evaluation. Calculated scores: {fitness_scores}", name="MEGA.PopulationManager") # Updated
 
         return fitness_scores
 

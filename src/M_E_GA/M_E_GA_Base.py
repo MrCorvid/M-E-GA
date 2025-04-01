@@ -13,11 +13,16 @@ import datetime
 import json
 import os
 import random
+# Removed: import logging
+from collections import OrderedDict # Added for loading checkpoint
+
+# Import LoggingManager first
+from ..networkCommon.logging_manager import LoggingManager, VERBOSE_LEVEL_NUM # Corrected import path
 
 from .GA_Logger import GA_Logger
 from .M_E_Engine import EncodingManager
 from .engine.crossover_manager import CrossoverManager
-from .engine.logging_manager import LoggingManager
+# Removed: from .engine.logging_manager import LoggingManager as EngineLoggingManager
 from .engine.mutation_manager import MutationManager
 from .engine.population_manager import PopulationManager
 
@@ -52,11 +57,11 @@ class M_E_GA_Base:
             max_generations=1000,
             delimiters=True,
             delimiter_space=3,
-            logging=True,
-            generation_logging=True,
-            mutation_logging=False,
-            crossover_logging=False,
-            individual_logging=False,
+            logging=True, # Keep this flag to enable/disable GA_Logger
+            generation_logging=True, # Keep for GA_Logger control
+            mutation_logging=False, # Keep for GA_Logger control
+            crossover_logging=False, # Keep for GA_Logger control
+            individual_logging=False, # Keep for GA_Logger control
             experiment_name=None,
             encodings=None,
             seed=None,
@@ -94,11 +99,11 @@ class M_E_GA_Base:
         :param max_generations: How many generations to run the GA.
         :param delimiters: Whether to include Start/End delimiters in random organisms.
         :param delimiter_space: The spacing for random insertion of delimiters.
-        :param logging: Enable or disable all logging.
-        :param generation_logging: If True, logs generation summaries.
-        :param mutation_logging: If True, logs each mutation event in detail.
-        :param crossover_logging: If True, logs each crossover event in detail.
-        :param individual_logging: If True, logs each individual's fitness each generation.
+        :param logging: Enable or disable all logging via GA_Logger.
+        :param generation_logging: If True, logs generation summaries via GA_Logger.
+        :param mutation_logging: If True, logs each mutation event in detail via GA_Logger.
+        :param crossover_logging: If True, logs each crossover event in detail via GA_Logger.
+        :param individual_logging: If True, logs each individual's fitness each generation via GA_Logger.
         :param experiment_name: Name of the experiment (used for logging filenames).
         :param encodings: Optionally supply a pre-built dictionary of encodings.
         :param seed: A random seed for reproducibility.
@@ -116,11 +121,14 @@ class M_E_GA_Base:
             "meta_genes", "meta_gene_stack", "metagene_usage", "deletion_basket", "unused_encodings", and optionally "gene_counter_ref".
         :param kwargs: Additional arguments that might be used in extended setups.
         """
+        # Get operational logger for M_E_GA_Base itself
+        self.op_logger = LoggingManager.get_logger("MEGA.Base")
+
         self.genes = genes
         self.fitness_function = fitness_function
         self.fitness_evaluator = fitness_evaluator
 
-        # Logging flags
+        # Logging flags (control GA_Logger behavior)
         self.logging = logging
         self.generation_logging = generation_logging
         self.mutation_logging = mutation_logging
@@ -164,16 +172,20 @@ class M_E_GA_Base:
         if seed is not None:
             random.seed(seed)
 
-        # Setup real-time event logger if logging is on
+        # Setup GA_Logger (for event logging) if logging is on
         if self.logging:
             if self.experiment_name is None:
                 self.experiment_name = "UnnamedExperiment"
-            self.logger = GA_Logger(self.experiment_name)
+            self.ga_event_logger = GA_Logger(self.experiment_name) # Renamed attribute
         else:
-            self.logger = None
+            self.ga_event_logger = None
 
         # Create an EncodingManager, integrate encodings if provided
-        self.encoding_manager = EncodingManager(lru_cache_size=self.lru_cache_size, logger=self.logger)
+        # Pass a dedicated logger instance
+        self.encoding_manager = EncodingManager(
+            lru_cache_size=self.lru_cache_size,
+            logger=LoggingManager.get_logger("MEGA.EncodingManager") # Pass specific logger
+        )
         if encodings:
             self.encoding_manager.integrate_uploaded_encodings(encodings, self.genes)
         else:
@@ -182,18 +194,12 @@ class M_E_GA_Base:
 
         # Instantiate manager classes
         self.population_manager = PopulationManager(self)
+        # Pass self, they can access self.ga_event_logger if needed, or get their own logger
         self.mutation_manager = MutationManager(self)
         self.crossover_manager = CrossoverManager(self)
 
-        # Instantiate the LoggingManager, used for generation-level logs
-        self.logging_manager = LoggingManager(
-            logging_enabled=self.logging,
-            generation_logging=self.generation_logging,
-            mutation_logging=self.mutation_logging,
-            crossover_logging=self.crossover_logging,
-            individual_logging=self.individual_logging,
-            logger=self.logger
-        )
+        # Remove instantiation of local LoggingManager
+        # self.logging_manager = EngineLoggingManager(...)
 
         # Initialize initial population and/or metagene population if provided (and not resuming)
         if not resume:
@@ -203,7 +209,6 @@ class M_E_GA_Base:
             if initial_metagene_population is not None and isinstance(initial_metagene_population, dict):
                 self.encoding_manager.meta_genes = initial_metagene_population.get("meta_genes", [])
                 self.encoding_manager.meta_gene_stack = initial_metagene_population.get("meta_gene_stack", [])
-                from collections import OrderedDict
                 self.encoding_manager.meta_manager.metagene_usage = OrderedDict(initial_metagene_population.get("metagene_usage", {}))
                 self.encoding_manager.meta_manager.deletion_basket = initial_metagene_population.get("deletion_basket", {})
                 self.encoding_manager.unused_encodings = initial_metagene_population.get("unused_encodings", [])
@@ -253,43 +258,27 @@ class M_E_GA_Base:
         """
         self.population = self.population_manager.initialize_population()
         return self.population
-    
+
     def append_generation_log(self, generation, fitness_scores, population):
         """
         Append a summary of the current generation's fitness data to a single compiled log file.
-        The log entry includes generation number, timestamp, average/median/best/worst fitness, 
+        The log entry includes generation number, timestamp, average/median/best/worst fitness,
         and a small sample of the population.
         """
-        import os, json, datetime
+        # This method seems redundant if GA_Logger is used correctly.
+        # GA_Logger should handle appending to the file.
+        # Let's log the event via GA_Logger instead.
+        if self.ga_event_logger and self.generation_logging:
+            generation_summary = {
+                "generation": generation,
+                "average_fitness": sum(fitness_scores) / len(fitness_scores) if fitness_scores else 0,
+                "median_fitness": sorted(fitness_scores)[len(fitness_scores)//2] if fitness_scores else 0,
+                "best_fitness": max(fitness_scores) if fitness_scores else 0,
+                "worst_fitness": min(fitness_scores) if fitness_scores else 0,
+                "population_sample": population[:5] # Keep sample small
+            }
+            self.ga_event_logger.log_event("generation_summary", generation_summary)
 
-        log_folder = "logs_and_log_tools"
-        if not os.path.exists(log_folder):
-            os.makedirs(log_folder)
-        # Use a consistent filename so all generation logs compile into one file.
-        log_filename = os.path.join(log_folder, f"{self.experiment_name}_compiled_log.json")
-
-        # Create a generation log entry.
-        generation_entry = {
-            "generation": generation,
-            "timestamp": datetime.datetime.now().isoformat(),
-            "average_fitness": sum(fitness_scores) / len(fitness_scores) if fitness_scores else 0,
-            "median_fitness": sorted(fitness_scores)[len(fitness_scores)//2] if fitness_scores else 0,
-            "best_fitness": max(fitness_scores) if fitness_scores else 0,
-            "worst_fitness": min(fitness_scores) if fitness_scores else 0,
-            "population_sample": population[:5]  # Optionally store a sample of the population.
-        }
-
-        # Load previous log entries if the file exists.
-        if os.path.exists(log_filename):
-            with open(log_filename, 'r') as f:
-                log_data = json.load(f)
-        else:
-            log_data = []
-
-        log_data.append(generation_entry)
-
-        with open(log_filename, 'w') as f:
-            json.dump(log_data, f, indent=4)
 
     def run_algorithm(self):
         # 1. Initialize population if empty.
@@ -299,8 +288,9 @@ class M_E_GA_Base:
         try:
             for generation in range(self.current_generation, self.max_generations):
                 self.current_generation = generation
-                # Start generation-level logging.
-                self.logging_manager.start_new_generation_logging(generation)
+                # Start generation-level logging (if GA_Logger is used)
+                if self.ga_event_logger:
+                     self.ga_event_logger.log_event("generation_start", {"generation": generation})
                 self.encoding_manager.start_new_generation()
 
                 # Evaluate fitness.
@@ -315,17 +305,8 @@ class M_E_GA_Base:
                 else:
                     avg_fit = med_fit = best_fit = worst_fit = 0
 
-                # Instead of using root logger directly, log the generation summary event via GA_Logger.
-                generation_summary = {
-                    "generation": generation,
-                    "average_fitness": avg_fit,
-                    "median_fitness": med_fit,
-                    "best_fitness": best_fit,
-                    "worst_fitness": worst_fit,
-                    # Optionally, add a small sample of the population (or other data)
-                    "population_sample": self.population[:5]
-                }
-                self.logger.log_event("generation_summary", generation_summary)
+                # Log generation summary event via GA_Logger.
+                self.append_generation_log(generation, self.fitness_scores, self.population) # Uses GA_Logger now
 
                 # Generate new population.
                 self.population = self.population_manager.select_and_generate_new_population(
@@ -336,40 +317,54 @@ class M_E_GA_Base:
                 if self.before_generation_finalize:
                     self.before_generation_finalize(self)
 
-                # Optionally log individual fitness details.
-                self.logging_manager.individual_logging_fitness(generation, self.population, self.fitness_scores)
+                # Optionally log individual fitness details via GA_Logger.
+                if self.ga_event_logger and self.individual_logging:
+                     for i, (ind, score) in enumerate(zip(self.population, self.fitness_scores)):
+                          self.ga_event_logger.log_event("individual_fitness", {
+                               "generation": generation,
+                               "individual_index": i,
+                               "fitness": score,
+                               "organism": ind # Log encoded organism
+                          })
 
                 # Save compiled logger events to a unified log file.
-                self.logger.save()
+                if self.ga_event_logger:
+                    self.ga_event_logger.save()
                 # Save checkpoint for recovery.
                 self.save_checkpoint()
 
         except KeyboardInterrupt:
-            print("Experiment interrupted. Saving checkpoint and logs.")
+            self.op_logger.info("Experiment interrupted. Saving checkpoint and logs.") # Use op_logger
             self.save_checkpoint()
-            self.logger.save()
+            if self.ga_event_logger:
+                self.ga_event_logger.save()
             raise
 
         # End-of-experiment final logging.
-        print(self.encoding_manager.encodings)
-        if self.logging:
+        # print(self.encoding_manager.encodings) # Keep this print? Or log it? Log as debug.
+        self.op_logger.debug(f"Final Encodings: {self.encoding_manager.encodings}")
+        if self.logging: # Check the original flag
             final_log = {
-                "initial_configuration": { ... },  # your existing config here
+                # "initial_configuration": { ... },  # Reconstruct if needed
                 "final_population": self.population,
                 "final_fitness_scores": self.fitness_scores,
                 "genes": self.genes,
                 "final_encodings": self.encoding_manager.encodings,
-                "compiled_logs": self.logging_manager.get_logs()
+                # "compiled_logs": self.logging_manager.get_logs() # Removed local logging_manager
             }
-            log_folder = "logs_and_log_tools"
+            log_folder = "logs" # Use unified log folder
             if not os.path.exists(log_folder):
                 os.makedirs(log_folder)
-            final_log_filename = os.path.join(log_folder, f"{self.experiment_name}_final_log_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.json")
-            with open(final_log_filename, 'w') as f:
-                json.dump(final_log, f, indent=4)
+            final_log_filename = os.path.join(log_folder, f"{self.experiment_name}_final_state_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.json")
+            try:
+                with open(final_log_filename, 'w') as f:
+                    json.dump(final_log, f, indent=4)
+                self.op_logger.info(f"Final experiment state saved to {final_log_filename}")
+            except Exception as e:
+                 self.op_logger.error(f"Failed to save final experiment state: {e}", exc_info=True)
 
-            if self.logger:
-                self.logger.save()
+            if self.ga_event_logger:
+                self.ga_event_logger.save() # Final save of any remaining events
 
     def save_checkpoint(self):
         """
@@ -392,8 +387,12 @@ class M_E_GA_Base:
                 "gene_counter_ref": self.encoding_manager.gene_counter_ref
             }
         }
-        with open(self.checkpoint_filename, "w") as f:
-            json.dump(checkpoint_data, f, indent=4)
+        try:
+            with open(self.checkpoint_filename, "w") as f:
+                json.dump(checkpoint_data, f, indent=4)
+            self.op_logger.debug(f"Checkpoint saved to {self.checkpoint_filename}")
+        except Exception as e:
+             self.op_logger.error(f"Failed to save checkpoint to {self.checkpoint_filename}: {e}", exc_info=True)
 
     def load_checkpoint(self, filename=None):
         """
@@ -402,21 +401,27 @@ class M_E_GA_Base:
         """
         filename = filename if filename else self.checkpoint_filename
         if os.path.exists(filename):
-            with open(filename, "r") as f:
-                checkpoint_data = json.load(f)
-            self.current_generation = checkpoint_data.get("current_generation", 0)
-            self.population = checkpoint_data.get("population", [])
-            encoding_state = checkpoint_data.get("encoding_manager_state", {})
-            self.encoding_manager.encodings = encoding_state.get("encodings", {})
-            self.encoding_manager.reverse_encodings = encoding_state.get("reverse_encodings", {})
-            self.encoding_manager.meta_genes = encoding_state.get("meta_genes", [])
-            self.encoding_manager.meta_gene_stack = encoding_state.get("meta_gene_stack", [])
-            from collections import OrderedDict
-            metagene_usage_list = encoding_state.get("metagene_usage", [])
-            self.encoding_manager.meta_manager.metagene_usage = OrderedDict(metagene_usage_list)
-            self.encoding_manager.meta_manager.deletion_basket = encoding_state.get("deletion_basket", {})
-            self.encoding_manager.unused_encodings = encoding_state.get("unused_encodings", [])
-            self.encoding_manager.gene_counter_ref = encoding_state.get("gene_counter_ref", [3])
-            print(f"Checkpoint loaded from {filename}.")
+            try:
+                with open(filename, "r") as f:
+                    checkpoint_data = json.load(f)
+                self.current_generation = checkpoint_data.get("current_generation", 0)
+                self.population = checkpoint_data.get("population", [])
+                encoding_state = checkpoint_data.get("encoding_manager_state", {})
+                self.encoding_manager.encodings = encoding_state.get("encodings", {})
+                self.encoding_manager.reverse_encodings = encoding_state.get("reverse_encodings", {})
+                self.encoding_manager.meta_genes = encoding_state.get("meta_genes", [])
+                self.encoding_manager.meta_gene_stack = encoding_state.get("meta_gene_stack", [])
+                metagene_usage_list = encoding_state.get("metagene_usage", [])
+                self.encoding_manager.meta_manager.metagene_usage = OrderedDict(metagene_usage_list)
+                self.encoding_manager.meta_manager.deletion_basket = encoding_state.get("deletion_basket", {})
+                self.encoding_manager.unused_encodings = encoding_state.get("unused_encodings", [])
+                self.encoding_manager.gene_counter_ref = encoding_state.get("gene_counter_ref", [3])
+                self.op_logger.info(f"Checkpoint loaded from {filename}. Resuming from generation {self.current_generation}.") # Use op_logger
+            except Exception as e:
+                 self.op_logger.error(f"Failed to load or parse checkpoint file {filename}: {e}", exc_info=True)
+                 # Reset state if loading fails? Or raise error? Resetting for now.
+                 self.current_generation = 0
+                 self.population = []
+                 # Reset encoding manager state? Might be complex.
         else:
-            print(f"No checkpoint file found at {filename}.")
+            self.op_logger.warning(f"No checkpoint file found at {filename}. Starting from scratch.") # Use op_logger
